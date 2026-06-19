@@ -41,18 +41,10 @@
  */
 
 // ---------------------------------------------------------------------------
-// DENY — destructive operations. Matched anywhere in the command string so
-// they're caught even inside a chain like `pnpm build && rm -rf dist`.
+// Destructive git operations. git behaves identically in any shell, so these
+// are shared by the Bash and PowerShell deny sets below.
 // ---------------------------------------------------------------------------
-const DENY_RULES = [
-  // rm is matched with an optional path prefix so `/bin/rm -rf` and `$(which
-  // rm) -rf` can't slip past by not starting at a word separator.
-  { pattern: /(^|[\s;&|(=])(?:\S*\/)?rm\s+-[a-z]*r/i,  reason: 'recursive rm (rm -r / -rf) is blocked.' },
-  { pattern: /(^|[\s;&|(=])(?:\S*\/)?rm\s+[^\n]*--recursive/i, reason: 'recursive rm (--recursive) is blocked.' },
-  // find can delete a whole tree as effectively as rm -rf; these forms are
-  // irreversible and have no safe-by-default reading, so they're hard-denied.
-  { pattern: /\bfind\b[^\n]*\s-delete\b/i,            reason: 'find -delete recursively deletes and is blocked. Use the Glob/Read tools to inspect, then delete deliberately.' },
-  { pattern: /\bfind\b[^\n]*-exec(?:dir)?\s+(?:\S*\/)?rm\b/i, reason: 'find -exec rm is blocked.' },
+const GIT_DENY_RULES = [
   { pattern: /\bgit\s+push\b[^\n]*(--force\b|--force-with-lease\b|\s-f\b)/i, reason: 'force-push is blocked.' },
   { pattern: /\bgit\s+push\s+\S+\s+(main|master)\b/i, reason: 'pushing directly to main/master is blocked. Push a feature branch and open a PR.' },
   // Remote-destructive pushes: branch deletion (`--delete`/`-d`/`origin :ref`)
@@ -64,9 +56,26 @@ const DENY_RULES = [
   { pattern: /\bgit\s+clean\s+(-\S+\s+)*-\S*f/i,      reason: 'git clean -f deletes untracked files and is blocked.' },
   { pattern: /\bgit\s+checkout\s+--\s+\./,            reason: 'git checkout -- . discards all local changes and is blocked.' },
   { pattern: /\bgit\s+branch\s+-D\b/,                 reason: 'force-deleting a branch (git branch -D) is blocked.' },
+];
+
+// ---------------------------------------------------------------------------
+// DENY (Bash) — destructive Unix ops + the shared git rules. Matched anywhere
+// in the command string so they're caught even inside a chain like
+// `pnpm build && rm -rf dist`.
+// ---------------------------------------------------------------------------
+const DENY_RULES = [
+  // rm is matched with an optional path prefix so `/bin/rm -rf` and `$(which
+  // rm) -rf` can't slip past by not starting at a word separator.
+  { pattern: /(^|[\s;&|(=])(?:\S*\/)?rm\s+-[a-z]*r/i,  reason: 'recursive rm (rm -r / -rf) is blocked.' },
+  { pattern: /(^|[\s;&|(=])(?:\S*\/)?rm\s+[^\n]*--recursive/i, reason: 'recursive rm (--recursive) is blocked.' },
+  // find can delete a whole tree as effectively as rm -rf; these forms are
+  // irreversible and have no safe-by-default reading, so they're hard-denied.
+  { pattern: /\bfind\b[^\n]*\s-delete\b/i,            reason: 'find -delete recursively deletes and is blocked. Use the Glob/Read tools to inspect, then delete deliberately.' },
+  { pattern: /\bfind\b[^\n]*-exec(?:dir)?\s+(?:\S*\/)?rm\b/i, reason: 'find -exec rm is blocked.' },
   { pattern: /\bdd\s+if=/i,                           reason: 'raw dd writes are blocked.' },
   { pattern: /\bmkfs\b/i,                             reason: 'mkfs (format) is blocked.' },
   { pattern: /:\s*\(\s*\)\s*\{[^}]*\}\s*;/,           reason: 'fork bomb pattern is blocked.' },
+  ...GIT_DENY_RULES,
 ];
 
 // ---------------------------------------------------------------------------
@@ -178,6 +187,103 @@ function isAutoApprovable(command) {
   return ALLOW_COMMANDS.has(leadingCommand(command));
 }
 
+// ===========================================================================
+// PowerShell coverage. On Windows the agent has a PowerShell tool SEPARATE from
+// Bash; without this it was unguarded (`Remove-Item -Recurse` slipped past the
+// Bash-only rules) AND never auto-approved (so every cmdlet prompted). These
+// mirror the Bash tiers in PowerShell syntax. Two deliberate differences:
+//   - The object pipeline `|` is idiomatic and is NOT blocked. Only file
+//     redirects (`>`, Out-File, Set-Content) are steered to the Write tool.
+//   - `;` is a statement separator (like `&&`), so it blocks auto-approve.
+// The deny scan still runs over the WHOLE string, so `gci -Recurse |
+// Remove-Item -Force` is caught despite being a single pipeline.
+// ===========================================================================
+const PS_REMOVE = 'Remove-Item|rm|ri|rd|rmdir|del|erase';
+const PS_DENY_RULES = [
+  // Recursive Remove-Item (any alias). `-r` is an unambiguous abbreviation of
+  // -Recurse for Remove-Item. `[^;|\n]*` keeps the flag in the same pipeline
+  // segment so `rm a.txt; gci -Recurse` isn't misread as a recursive delete.
+  { pattern: new RegExp(`(^|[\\s;|(=])(?:${PS_REMOVE})\\b[^;|\\n]*\\s-r(?:ec(?:urse)?)?\\b`, 'i'),
+    reason: 'recursive Remove-Item (-Recurse) is blocked.' },
+  // Anything piped into a removal WITH -Recurse/-Force is a bulk delete.
+  { pattern: new RegExp(`\\|\\s*(?:${PS_REMOVE})\\b[^;\\n]*\\s-(?:Recurse|Force|r|f)\\b`, 'i'),
+    reason: 'piping into Remove-Item -Recurse/-Force is a bulk delete and is blocked.' },
+  { pattern: /(^|[\s;|(=])(?:Clear-Content|clc)\b/i, reason: 'Clear-Content wipes a file’s contents and is blocked. Use the Write tool to replace a file.' },
+  { pattern: /\b(?:Format-Volume|Clear-Disk|Remove-Partition|Initialize-Disk|Reset-PhysicalDisk)\b/i, reason: 'disk/partition operations are blocked.' },
+  { pattern: /(^|[\s;|(=])(?:Remove-Item|rm|ri)\b[^;\n]*\b(?:HKLM|HKCU|HKCR|HKU):/i, reason: 'registry key deletion is blocked.' },
+  { pattern: /(^|[\s;|(=])(?:del|rd|rmdir)\b[^;\n]*\/s\b/i, reason: 'recursive del/rd /s is blocked.' },
+  ...GIT_DENY_RULES,
+];
+
+// File-writing → steer to the Write tool (mirrors the Bash redirect block).
+const PS_GUIDANCE_RULES = [
+  {
+    test: (cmd) => /(^|[\s;|(=])(?:Out-File|Set-Content|Add-Content|Tee-Object|tee)\b/i.test(cmd),
+    reason: 'Do not write files with Out-File/Set-Content/Add-Content. Use the Write tool.',
+  },
+  {
+    test: (cmd) => /[0-9]*>[^&]/.test(cmd),
+    reason: 'No output redirections (`>`/`>>`) to files. Let stdout return the result, or use the Write tool. (`2>&1` is fine.)',
+  },
+  {
+    test: (cmd) => /(^|;|&&|\|\|)\s*(?:cd|sl|Set-Location|Push-Location|pushd)\b/i.test(cmd),
+    reason: 'Do not use `cd`/Set-Location — the working directory persists between PowerShell calls. Use a full path instead.',
+  },
+];
+
+// Safe read-only / inspection cmdlets + aliases (lower-cased to match
+// leadingCommand). Dev tools (git, node, npm, …) come from ALLOW_COMMANDS.
+const PS_ALLOW = new Set([
+  'get-childitem', 'gci', 'ls', 'dir',
+  'get-content', 'gc', 'cat', 'type',
+  'get-item', 'gi', 'get-itemproperty', 'gip',
+  'test-path',
+  'get-location', 'pwd', 'gl',
+  'resolve-path', 'split-path', 'join-path',
+  'select-string', 'sls',
+  'select-object', 'select',
+  'where-object', 'where',
+  'sort-object', 'sort',
+  'measure-object', 'measure',
+  'group-object', 'group',
+  'get-unique', 'gu',
+  'get-command', 'gcm', 'get-help', 'help', 'get-member', 'gm', 'get-module', 'gmo',
+  'get-process', 'gps', 'ps',
+  'get-date',
+  'compare-object', 'diff',
+  'convertto-json', 'convertfrom-json',
+  'format-table', 'ft', 'format-list', 'fl', 'format-wide', 'fw',
+  'out-string', 'out-host',
+  'write-output', 'echo', 'write', 'write-host', 'write-verbose', 'write-warning',
+  'new-item', 'ni', 'md', 'mkdir',
+]);
+
+// Constructs that must never auto-approve in PowerShell — even when the leading
+// cmdlet is on PS_ALLOW (e.g. a safe `gci` piped into a mutating cmdlet, or a
+// scriptblock that runs arbitrary code). They fall through to a prompt.
+const PS_NEVER_AUTO = [
+  /\b(?:iex|Invoke-Expression|icm|Invoke-Command|Invoke-Item|Add-Type)\b/i,
+  /\b(?:saps|Start-Process)\b/i,
+  /\b(?:iwr|Invoke-WebRequest|irm|Invoke-RestMethod|Start-BitsTransfer|curl|wget)\b/i,
+  /\bForEach-Object\b/i,
+  /(^|[\s|;(=])%[\s({]/,                 // % { … } scriptblock (ForEach-Object alias)
+  /&\s+[$(]/,                            // call operator on a variable / expression
+  /(^|[\s;])\.\s+[$(]/,                  // dot-source a variable / expression
+  // Any mutating verb anywhere blocks auto-approve. Recursive/forced forms are
+  // already hard-denied above; this catches the non-recursive ones so a delete
+  // never runs silently (e.g. `gci | Remove-Item`).
+  /(^|[\s|;(=])(?:Remove-Item|rm|ri|rd|rmdir|del|erase|Clear-Item|Clear-Content|clc|Move-Item|mv|move|Rename-Item|ren|rni|Set-Item|Set-ItemProperty|Set-Content|Add-Content|Stop-Process|kill|spps|Stop-Service)\b/i,
+  /\bNew-Item\b[^;\n]*\s-Force\b/i,      // New-Item -Force can truncate an existing file
+];
+
+function isAutoApprovablePS(command) {
+  if (HAS_CHAIN.test(command)) return false;                         // && or ; — can't vouch for the 2nd statement
+  if (NEVER_AUTO_ALLOW.some((re) => re.test(command))) return false; // shared: node -e, python -c, …
+  if (PS_NEVER_AUTO.some((re) => re.test(command))) return false;
+  const token = leadingCommand(command);
+  return PS_ALLOW.has(token) || ALLOW_COMMANDS.has(token);
+}
+
 // ---------------------------------------------------------------------------
 // Decision helpers — PreToolUse output schema.
 // ---------------------------------------------------------------------------
@@ -193,31 +299,48 @@ function emit(permissionDecision, permissionDecisionReason) {
   };
 }
 
-function decide(rawInput) {
-  const event = JSON.parse(rawInput || '{}');
-
-  // Only police Bash. Everything else is none of our business.
-  if (event.tool_name !== 'Bash') return passthrough();
-
-  const command = ((event.tool_input || {}).command || '').trim();
-  if (!command) return passthrough();
-
+function decideBash(command) {
   for (const rule of DENY_RULES) {
     if (rule.pattern.test(command)) {
       return emit('deny', `BLOCKED (dangerous): ${rule.reason}`);
     }
   }
-
   for (const rule of BLOCK_RULES) {
     if (rule.test(command)) {
       return emit('deny', `BLOCKED: ${rule.reason}`);
     }
   }
-
   if (isAutoApprovable(command)) {
     return emit('allow', 'Auto-approved by bash-guardrails (known-safe dev command).');
   }
+  return passthrough();
+}
 
+function decidePowershell(command) {
+  for (const rule of PS_DENY_RULES) {
+    if (rule.pattern.test(command)) {
+      return emit('deny', `BLOCKED (dangerous): ${rule.reason}`);
+    }
+  }
+  for (const rule of PS_GUIDANCE_RULES) {
+    if (rule.test(command)) {
+      return emit('deny', `BLOCKED: ${rule.reason}`);
+    }
+  }
+  if (isAutoApprovablePS(command)) {
+    return emit('allow', 'Auto-approved by bash-guardrails (known-safe PowerShell command).');
+  }
+  return passthrough();
+}
+
+function decide(rawInput) {
+  const event = JSON.parse(rawInput || '{}');
+  const command = ((event.tool_input || {}).command || '').trim();
+  if (!command) return passthrough();
+
+  // Police the shell tools. Anything else (Read, Write, Edit, …) is not ours.
+  if (event.tool_name === 'Bash') return decideBash(command);
+  if (/^(?:powershell|pwsh)$/i.test(event.tool_name || '')) return decidePowershell(command);
   return passthrough();
 }
 

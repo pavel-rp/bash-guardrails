@@ -87,6 +87,23 @@ change to plugin files MUST bump `version` in **both** `plugin.json` and
 the file under the cache path directly for instant relief, then bump+push for
 the durable fix.
 
+## Two shells: Bash and PowerShell
+
+On Windows the agent has a **PowerShell** tool separate from Bash. The hook
+matcher is `"Bash|PowerShell"` and `decide()` dispatches on `tool_name`:
+`Bash` → `decideBash`, `powershell`/`pwsh` → `decidePowershell`, anything else →
+passthrough. If you add a shell tool, add it to BOTH the matcher and the
+dispatcher or it runs unguarded (a `wire` test asserts the matcher covers both).
+
+PowerShell rules mirror the Bash tiers but differ deliberately:
+- **The object pipeline `|` is NOT blocked** — it's idiomatic typed-object flow,
+  not a Bash text pipe. Only file redirects (`>`, `Out-File`, `Set-Content`) are
+  steered to the Write tool. The deny scan still runs over the whole string, so
+  `gci -Recurse | Remove-Item -Force` is caught despite being one pipeline.
+- `GIT_DENY_RULES` is shared by both shells (git is shell-agnostic).
+- `PS_NEVER_AUTO` blocks auto-approve for any mutating verb / scriptblock / iex /
+  download even when the leading cmdlet is safe — so `gci | Remove-Item` prompts.
+
 ## Name must agree in three places
 
 The plugin name is referenced in `.claude-plugin/marketplace.json`,

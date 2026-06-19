@@ -3,7 +3,8 @@
 A Claude Code marketplace plugin that **tames the constant permission prompts**
 without resorting to `--dangerously-skip-permissions`.
 
-It installs a single `PreToolUse` hook that makes three decisions per Bash
+It installs a single `PreToolUse` hook that polices **both the Bash and
+PowerShell tools** (on Windows the agent has both), making three decisions per
 command:
 
 | Decision | What | Examples |
@@ -35,6 +36,17 @@ to *approve* the gnarly commands — it makes Claude **stop writing them**. The
 `BLOCK` reasons push Claude to run clean, single-purpose commands and to use the
 `Read`/`Write`/`Glob` tools. Those clean commands then match the `ALLOW` set and
 run silently.
+
+## PowerShell
+
+On Windows the agent reaches for a separate **PowerShell** tool, so the hook
+covers it too (matcher `Bash|PowerShell`). The PowerShell tier denies
+`Remove-Item -Recurse`, `gci -Recurse | Remove-Item`, `Clear-Content`, disk
+formats, and the shared destructive git ops; steers `Out-File`/`Set-Content`/`>`
+to the Write tool; and auto-approves read-only cmdlets (`Get-ChildItem`,
+`Select-String`, …) and dev tools. Unlike Bash, the object pipeline `|` is **not**
+blocked — it's idiomatic in PowerShell — but the deny scan still reads the whole
+pipeline, so a recursive delete hidden after a `|` is still caught.
 
 ## Install
 
