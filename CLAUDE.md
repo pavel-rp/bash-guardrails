@@ -39,6 +39,19 @@ not hot-swapped. Re-running a test mid-session will exercise the OLD hook.
   are already blocked) whose leading token — after stripping `VAR=value` env
   prefixes — is in `ALLOW_COMMANDS`. Don't auto-allow chained commands; the deny
   scan can't vouch for an unknown second segment.
+- **`NEVER_AUTO_ALLOW` is the ask tier, and it's deliberate.** Inline
+  interpreters (`node -e`, `python -c`, `perl/ruby -e`, `bun -e`, `deno eval`),
+  `find -exec`, and `chmod/chown -R` have allow-listed leading tokens but are
+  demoted to a prompt because the deny scan **cannot see inside an interpreter** —
+  `node -e` runs JS, so no `rm -rf` regex applies. Don't move these back into
+  silent auto-allow to kill a prompt; that reopens the `fs.rmSync` hole.
+- **rm/find deny rules are path-aware on purpose.** `rm` matches an optional
+  `\S*/` prefix so `/bin/rm -rf` can't dodge the separator anchor; `find -delete`
+  and `find -exec rm` are hard-denied (they wipe a tree like `rm -rf`). Keep the
+  path prefix when editing.
+- **`git push` denials cover remote-destructive forms too**, not just force/main:
+  `--delete`/`-d`, `origin :branch` (the `\s:` requires a *space* before the
+  colon, so legit `local:remote` refspecs still allow), and `--mirror`.
 - **Some false positives are intentional.** `node -e "a > b"` is blocked because
   `>` reads as a redirection. The cost is a harmless rewrite, never a wrong
   execution. Don't loosen a regex to kill a false positive without weighing the

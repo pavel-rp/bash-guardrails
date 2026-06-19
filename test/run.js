@@ -28,10 +28,22 @@ const CASES = [
 
   // DENY -> destructive
   ['rm -rf',                'rm -rf dist', 'deny'],
+  ['rm -rf via path',       '/bin/rm -rf dist', 'deny'],
   ['force push',            'git push --force origin feat', 'deny'],
   ['push main',             'git push origin main', 'deny'],
   ['reset --hard',          'git reset --hard HEAD~1', 'deny'],
   ['chain hides rm',        'pnpm build && rm -rf dist', 'deny'],
+  ['find -delete',          'find ~ -name "*.js" -delete', 'deny'],
+  ['find -exec rm',         'find . -name node_modules -exec rm -rf {} +', 'deny'],
+  ['push --delete',         'git push origin --delete feature', 'deny'],
+  ['push :branch',          'git push origin :old-branch', 'deny'],
+  ['push --mirror',         'git push --mirror backup', 'deny'],
+
+  // ASK -> dangerous form of an allowed tool (demoted from auto-allow)
+  ['node -e rmSync',        'node -e "require(\'fs\').rmSync(process.env.HOME,{recursive:true})"', 'ask'],
+  ['python -c rmtree',      'python3 -c "import shutil,os; shutil.rmtree(os.path.expanduser(\'~\'))"', 'ask'],
+  ['find -exec mv',         'find . -name "*.tmp" -exec mv {} /tmp \\;', 'ask'],
+  ['chmod -R',              'chmod -R 777 .', 'ask'],
 
   // ALLOW -> safe single commands
   ['pnpm test',             'pnpm test', 'allow'],
@@ -39,6 +51,9 @@ const CASES = [
   ['gh pr view --json',     'gh pr view 4 --json headRefOid', 'allow'],
   ['env-prefixed pnpm',     'NODE_OPTIONS=--max-old-space-size=4096 pnpm type-check', 'allow'],
   ['push feature branch',   'git push origin feat/gly-4', 'allow'],
+  ['node script file',      'node build.js', 'allow'],
+  ['find by name',          'find src -name "*.ts"', 'allow'],
+  ['push refspec',          'git push origin local:remote', 'allow'],
 
   // ASK -> passthrough (empty {})
   ['chained safe',          'pnpm build && pnpm test', 'ask'],

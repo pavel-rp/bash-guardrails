@@ -8,11 +8,16 @@ command:
 
 | Decision | What | Examples |
 |----------|------|----------|
-| **DENY** | Hard-block destructive ops | `rm -rf`, `git push --force`, `git reset --hard`, `git clean -f`, push to `main`/`master` |
+| **DENY** | Hard-block destructive ops | `rm -rf` (incl. `/bin/rm -rf`), `find -delete`, `find -exec rm`, `git push --force`, `git reset --hard`, `git clean -f`, `git push --delete`/`:branch`/`--mirror`, push to `main`/`master` |
 | **BLOCK** | Reject obfuscation-prone compound commands **with an instructive reason**, so Claude rewrites them cleanly | pipes `\|`, redirects `>`, `cd`, heredocs `<<`, `jq`, `cat`/`head`/`tail`, backticks |
 | **ALLOW** | Auto-approve known-safe dev commands | `git`, `gh`, `pnpm`, `npm`, `npx`, `node`, `ls`, `grep`, `mkdir`, `echo`, … |
 
-Everything else falls through to Claude Code's normal permission prompt.
+Everything else falls through to Claude Code's normal permission prompt — the
+**ask** tier. The dangerous *forms* of otherwise-allowed tools are deliberately
+demoted here rather than auto-approved: inline interpreters (`node -e`,
+`python -c`, `perl -e`, `bun -e`, `deno eval`), `find -exec`, and `chmod`/`chown
+-R`. They're useful but can do anything, so they prompt instead of running
+silently.
 
 ## Why it works
 
@@ -63,11 +68,18 @@ Edit, save, restart. To loosen a rule (e.g. allow pipes), delete it from
 
 - **More round-trips.** Claude runs 4 clean calls instead of 1 blob. Each is
   silent, which is the point.
-- **`node`/`npx` are auto-allowed.** A `node -e "…"` can do anything; the deny
-  scan catches literal `rm -rf` but not, say, `fs.rmSync`. Remove `node`/`npx`
-  from `ALLOW_COMMANDS` if you want them to prompt.
-- **Regex, not a shell parser.** A few false positives are intentional (e.g.
-  `node -e "a > b"` is blocked because `>` looks like redirection). The cost is a
+- **Inline interpreters prompt, but plain scripts auto-run.** `node -e "…"` /
+  `python -c "…"` can do anything the deny scan can't see inside (it catches
+  literal `rm -rf`, not `fs.rmSync`), so those forms fall to the **ask** tier.
+  `node build.js` and `python script.py` still auto-approve. Add forms to
+  `NEVER_AUTO_ALLOW` to demote more; remove `node`/`npx` from `ALLOW_COMMANDS`
+  to make them always prompt.
+- **Regex, not a shell parser — and not a security boundary.** This is a
+  friction-reducer and mistake-catcher, not adversary-proof. A determined bypass
+  (path aliasing, base64, `bash -c`, writing a script to disk) can defeat any
+  in-process command filter; the real boundary is git's recoverability plus, if
+  you need it, an OS sandbox. A few false positives are intentional (e.g.
+  `node -e "a > b"` is blocked because `>` looks like redirection); the cost is a
   rewrite, not a wrong execution.
 
 ## Layout

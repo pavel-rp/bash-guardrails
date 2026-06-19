@@ -45,10 +45,21 @@
 // they're caught even inside a chain like `pnpm build && rm -rf dist`.
 // ---------------------------------------------------------------------------
 const DENY_RULES = [
-  { pattern: /(^|[\s;&|(])rm\s+-[a-z]*r/i,            reason: 'recursive rm (rm -r / -rf) is blocked.' },
-  { pattern: /\brm\s+[^\n]*--recursive/i,             reason: 'recursive rm (--recursive) is blocked.' },
+  // rm is matched with an optional path prefix so `/bin/rm -rf` and `$(which
+  // rm) -rf` can't slip past by not starting at a word separator.
+  { pattern: /(^|[\s;&|(=])(?:\S*\/)?rm\s+-[a-z]*r/i,  reason: 'recursive rm (rm -r / -rf) is blocked.' },
+  { pattern: /(^|[\s;&|(=])(?:\S*\/)?rm\s+[^\n]*--recursive/i, reason: 'recursive rm (--recursive) is blocked.' },
+  // find can delete a whole tree as effectively as rm -rf; these forms are
+  // irreversible and have no safe-by-default reading, so they're hard-denied.
+  { pattern: /\bfind\b[^\n]*\s-delete\b/i,            reason: 'find -delete recursively deletes and is blocked. Use the Glob/Read tools to inspect, then delete deliberately.' },
+  { pattern: /\bfind\b[^\n]*-exec(?:dir)?\s+(?:\S*\/)?rm\b/i, reason: 'find -exec rm is blocked.' },
   { pattern: /\bgit\s+push\b[^\n]*(--force\b|--force-with-lease\b|\s-f\b)/i, reason: 'force-push is blocked.' },
   { pattern: /\bgit\s+push\s+\S+\s+(main|master)\b/i, reason: 'pushing directly to main/master is blocked. Push a feature branch and open a PR.' },
+  // Remote-destructive pushes: branch deletion (`--delete`/`-d`/`origin :ref`)
+  // and `--mirror` (which can delete remote refs to match local).
+  { pattern: /\bgit\s+push\b[^\n]*\s(?:--delete\b|-d\b)/i, reason: 'deleting a remote branch (git push --delete) is blocked.' },
+  { pattern: /\bgit\s+push\b[^\n]*\s:[^\s/]/i,         reason: 'deleting a remote branch (git push origin :branch) is blocked.' },
+  { pattern: /\bgit\s+push\b[^\n]*--mirror\b/i,        reason: 'git push --mirror can delete remote refs and is blocked.' },
   { pattern: /\bgit\s+reset\s+--hard\b/i,             reason: 'git reset --hard discards work and is blocked.' },
   { pattern: /\bgit\s+clean\s+(-\S+\s+)*-\S*f/i,      reason: 'git clean -f deletes untracked files and is blocked.' },
   { pattern: /\bgit\s+checkout\s+--\s+\./,            reason: 'git checkout -- . discards all local changes and is blocked.' },
@@ -130,6 +141,25 @@ const ALLOW_COMMANDS = new Set([
 // here we only need to guard against `&&` and `;`.
 const HAS_CHAIN = /&&|;/;
 
+// Dangerous *forms* of otherwise-allowed tools. A leading token like `node` or
+// `find` is on ALLOW_COMMANDS, but these flag combinations turn it into
+// arbitrary code execution or a delete — so we refuse to AUTO-approve them and
+// let them fall through to Claude Code's normal permission prompt instead.
+// This is the "ask" tier: not destructive enough to hard-deny, not safe enough
+// to run silently. The deny scan can't see inside an interpreter (`node -e`
+// runs JS, not a shell token a regex on `rm -rf` would catch), so inline-eval
+// must prompt rather than auto-run. See README "Trade-offs".
+const NEVER_AUTO_ALLOW = [
+  // interpreters running inline code (node -e, python -c, perl/ruby -e, bun -e)
+  /\b(?:node|bun|python|python3|perl|ruby)\b[^\n]*\s-(?:e|c)\b/i,
+  /\b(?:node)\b[^\n]*\s--eval\b/i,
+  /\bdeno\s+eval\b/i,
+  // find running an arbitrary command per match (-exec rm is already denied)
+  /\bfind\b[^\n]*-exec(?:dir)?\b/i,
+  // recursive permission/ownership changes
+  /\bch(?:mod|own)\b[^\n]*\s-[a-z]*R\b/i,
+];
+
 /**
  * Strip leading `VAR=value` env assignments, then return the base name of the
  * first token. e.g. `NODE_OPTIONS=--max-old-space-size=4096 pnpm test`
@@ -144,6 +174,7 @@ function leadingCommand(command) {
 
 function isAutoApprovable(command) {
   if (HAS_CHAIN.test(command)) return false;
+  if (NEVER_AUTO_ALLOW.some((re) => re.test(command))) return false;
   return ALLOW_COMMANDS.has(leadingCommand(command));
 }
 
