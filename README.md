@@ -13,6 +13,11 @@ command:
 | **BLOCK** | Reject obfuscation-prone compound commands **with an instructive reason**, so Claude rewrites them cleanly | pipes `\|`, redirects `>`, `cd`, heredocs `<<`, `jq`, `cat`/`head`/`tail`, backticks |
 | **ALLOW** | Auto-approve known-safe dev commands | `git`, `gh`, `pnpm`, `npm`, `npx`, `node`, `ls`, `grep`, `mkdir`, `echo`, … |
 
+A `;`/`&&` **chain of allow-listed commands** is blocked too, with guidance to
+run the parts as separate calls (each then auto-approves silently). Chains that
+genuinely need one shell — control flow (`for …; do …; done`) or shell state
+(`source … && …`) — are exempt, because their leading word isn't allow-listed.
+
 Everything else falls through to Claude Code's normal permission prompt — the
 **ask** tier. The dangerous *forms* of otherwise-allowed tools are deliberately
 demoted here rather than auto-approved: inline interpreters (`node -e`,

@@ -58,8 +58,17 @@ const CASES = [
   ['find by name',          'find src -name "*.ts"', 'allow'],
   ['push refspec',          'git push origin local:remote', 'allow'],
 
+  // BLOCK -> chain of allow-listed commands, split into separate calls
+  ['chain of allowed',      'pnpm build && pnpm test', 'deny'],
+  ['chain git+echo',        'git status; git log --oneline -5', 'deny'],
+  ['real chained read-only', 'git -C "B:/x" check-ignore -v .claude/settings.local.json; echo "rc=$?"; git -C "B:/x" ls-files .claude/; git -C "B:/x" status --porcelain .claude/', 'deny'],
+
+  // ASK -> chains that must NOT be split (control flow / shell state) pass through
+  ['control-flow exempt',   'for f in *.ts; do echo $f; done', 'ask'],
+  ['source-chain exempt',   'source venv/bin/activate && python app.py', 'ask'],
+  ['mixed chain',           'frobnicate --now && git status', 'ask'],
+
   // ASK -> passthrough (empty {})
-  ['chained safe',          'pnpm build && pnpm test', 'ask'],
   ['unknown command',       'frobnicate --now', 'ask'],
 
   // ===== PowerShell tool (tool_name: 'PowerShell') =====
@@ -94,7 +103,9 @@ const CASES = [
 
   // ASK -> passthrough
   ['ps unknown cmdlet',       'Get-Service', 'ask', 'PowerShell'],
-  ['ps chained',              'Get-ChildItem; Get-Date', 'ask', 'PowerShell'],
+  // BLOCK -> chain of allow-listed cmdlets, split into separate calls
+  ['ps chain of allowed',     'Get-ChildItem; Get-Date', 'deny', 'PowerShell'],
+  ['ps mixed chain',          'Get-Service; Get-Date', 'ask', 'PowerShell'],
 ];
 
 function decisionFor(command, tool) {

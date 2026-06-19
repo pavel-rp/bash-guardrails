@@ -87,6 +87,16 @@ change to plugin files MUST bump `version` in **both** `plugin.json` and
 the file under the cache path directly for instant relief, then bump+push for
 the durable fix.
 
+## Chained allow-listed commands are blocked, on purpose
+
+`isSplittableChain` blocks a `;`/`&&` chain only when **every** segment leads
+with an allow-listed command (so it's a pure sequence of known-safe commands the
+model should issue as separate auto-approving calls). It deliberately does NOT
+fire on control-flow (`for`/`if` — `;` is syntax there) or shell-state chains
+(`source`/`export` — must share one shell), because those leading tokens aren't
+allow-listed and so the chain doesn't qualify. Don't "fix" that by adding `for`/
+`source` to `ALLOW_COMMANDS` — it would make those chains start getting blocked.
+
 ## Two shells: Bash and PowerShell
 
 On Windows the agent has a **PowerShell** tool separate from Bash. The hook

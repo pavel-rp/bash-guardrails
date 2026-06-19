@@ -85,6 +85,10 @@ const DENY_RULES = [
 // ---------------------------------------------------------------------------
 const BLOCK_RULES = [
   {
+    test: (cmd) => isSplittableChain(cmd, (t) => ALLOW_COMMANDS.has(t)),
+    reason: 'Do not chain commands with `;`/`&&`. Run each as a SEPARATE Bash call — every known-safe command auto-approves on its own, so splitting removes the permission prompt entirely. Independent calls can be sent in one message to run in parallel.',
+  },
+  {
     test: (cmd) => /(^|;|&&|\|\|)\s*cd\s+/.test(cmd),
     reason: 'Do not use `cd` — the working directory persists between Bash calls. Use a relative or absolute path instead.',
   },
@@ -181,6 +185,23 @@ function leadingCommand(command) {
   return match[1].split(/[\\/]/).pop().toLowerCase();
 }
 
+/**
+ * Split a command on top-level `;` / `&&` (pipes are blocked separately) and
+ * report whether it's a chain (>=2 segments) whose EVERY segment leads with an
+ * allow-listed command. Such a chain is a pure sequence of known-safe commands
+ * that would each auto-approve on its own, so we block it with guidance to run
+ * the parts as separate calls. Control-flow (`for`/`if`) and shell-state chains
+ * (`source`/`export`) are NOT affected: their leading tokens (`for`, `source`,
+ * …) aren't allow-listed, so the chain doesn't qualify and falls through.
+ * Naive splitting can mis-handle `;` inside quotes, but that only makes a chain
+ * fail to qualify (→ a prompt), never a wrong execution.
+ */
+function isSplittableChain(command, tokenAllowed) {
+  const segments = command.split(/\s*(?:;|&&)\s*/).map((s) => s.trim()).filter(Boolean);
+  if (segments.length < 2) return false;
+  return segments.every((seg) => tokenAllowed(leadingCommand(seg)));
+}
+
 function isAutoApprovable(command) {
   if (HAS_CHAIN.test(command)) return false;
   if (NEVER_AUTO_ALLOW.some((re) => re.test(command))) return false;
@@ -217,6 +238,10 @@ const PS_DENY_RULES = [
 
 // File-writing → steer to the Write tool (mirrors the Bash redirect block).
 const PS_GUIDANCE_RULES = [
+  {
+    test: (cmd) => isSplittableChain(cmd, (t) => PS_ALLOW.has(t) || ALLOW_COMMANDS.has(t)),
+    reason: 'Do not chain commands with `;`/`&&`. Run each as a SEPARATE PowerShell call — known-safe cmdlets auto-approve on their own, so splitting removes the permission prompt. Independent calls can be sent in one message to run in parallel.',
+  },
   {
     test: (cmd) => /(^|[\s;|(=])(?:Out-File|Set-Content|Add-Content|Tee-Object|tee)\b/i.test(cmd),
     reason: 'Do not write files with Out-File/Set-Content/Add-Content. Use the Write tool.',
