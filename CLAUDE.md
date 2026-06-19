@@ -22,6 +22,16 @@ It spawns the hook and feeds each case via stdin's `input` option (not a shell
 pipe). Add cases to the `CASES` table in `test/run.js`. Don't reach for
 `printf … | node …` — the pipe trips the hook's own block rule.
 
+## hooks.json must wrap events under a top-level `hooks` key
+
+`hooks/hooks.json` is **auto-discovered** by Claude Code and must be shaped
+`{ "hooks": { "PreToolUse": [ … ] } }`. Putting `PreToolUse` at the root fails
+to load with `expected record, received undefined at path ["hooks"]` and the
+plugin silently does nothing. `${CLAUDE_PLUGIN_ROOT}` is the correct path var.
+`test/run.js` spawns `guardrails.js` directly, so it can't catch a wiring break —
+the `wire` checks at the end of that file validate the `hooks.json` shape
+instead. Keep them.
+
 ## No hot-reload
 
 After editing `hooks/guardrails.js` or `hooks/hooks.json`, **restart Claude Code**

@@ -12,9 +12,12 @@
  */
 
 const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
 const path = require('node:path');
 
-const HOOK = path.join(__dirname, '..', 'plugins', 'bash-guardrails', 'hooks', 'guardrails.js');
+const HOOKS_DIR = path.join(__dirname, '..', 'plugins', 'bash-guardrails', 'hooks');
+const HOOK = path.join(HOOKS_DIR, 'guardrails.js');
+const HOOKS_JSON = path.join(HOOKS_DIR, 'hooks.json');
 
 // [label, command, expected decision: 'deny' | 'allow' | 'ask']
 const CASES = [
@@ -75,5 +78,28 @@ for (const [label, command, expected] of CASES) {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${expected.padEnd(5)} ${ok ? '' : `(got ${actual}) `}${label}`);
 }
 
-console.log(`\n${CASES.length - failed}/${CASES.length} passed`);
+// Validate hooks.json WIRING, not just guardrails.js logic. Claude Code requires
+// a top-level `hooks` record ({ "hooks": { "PreToolUse": [...] } }); putting the
+// event at the root fails to load with `expected record at path ["hooks"]`. The
+// command cases above spawn guardrails.js directly, so they'd never catch this.
+let wiringFailed = 0;
+function wiringCheck(label, ok) {
+  if (!ok) { wiringFailed++; failed++; }
+  console.log(`${ok ? 'PASS' : 'FAIL'}  wire  ${label}`);
+}
+try {
+  const cfg = JSON.parse(fs.readFileSync(HOOKS_JSON, 'utf8'));
+  wiringCheck('hooks.json has top-level "hooks" record', cfg.hooks && typeof cfg.hooks === 'object' && !Array.isArray(cfg.hooks));
+  const pre = cfg.hooks && cfg.hooks.PreToolUse;
+  wiringCheck('hooks.PreToolUse is an array', Array.isArray(pre));
+  const entry = Array.isArray(pre) ? pre[0] : null;
+  wiringCheck('PreToolUse[0] matches Bash', !!entry && entry.matcher === 'Bash');
+  const inner = entry && Array.isArray(entry.hooks) ? entry.hooks[0] : null;
+  wiringCheck('command references guardrails.js', !!inner && inner.type === 'command' && /guardrails\.js/.test(inner.command || ''));
+} catch (err) {
+  wiringCheck(`hooks.json parses (${err.message})`, false);
+}
+
+const total = CASES.length + 4;
+console.log(`\n${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);
