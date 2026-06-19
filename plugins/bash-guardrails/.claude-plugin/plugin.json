@@ -1,0 +1,17 @@
+{
+  "name": "bash-guardrails",
+  "version": "0.1.0",
+  "description": "Tames Claude Code permission prompts: denies dangerous shell ops, blocks obfuscation-prone compound commands with guidance, and auto-approves known-safe dev commands.",
+  "author": {
+    "name": "recky-ru"
+  },
+  "keywords": [
+    "hooks",
+    "permissions",
+    "guardrails",
+    "bash",
+    "safety",
+    "workflow"
+  ],
+  "hooks": "./hooks/hooks.json"
+}

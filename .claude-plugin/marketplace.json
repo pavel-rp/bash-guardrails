@@ -1,0 +1,17 @@
+{
+  "name": "bash-guardrails",
+  "owner": {
+    "name": "recky-ru"
+  },
+  "metadata": {
+    "description": "Guardrails that tame Claude Code's permission prompts by enforcing clean, single-purpose shell commands.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "bash-guardrails",
+      "source": "./plugins/bash-guardrails",
+      "description": "PreToolUse Bash guardrails: hard-deny dangerous ops, block obfuscation-prone compound commands with guidance, and auto-approve known-safe dev commands."
+    }
+  ]
+}
