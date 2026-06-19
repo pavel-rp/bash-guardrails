@@ -69,6 +69,19 @@ not hot-swapped. Re-running a test mid-session will exercise the OLD hook.
 - **Empty `{}` output means "no opinion"** → Claude Code shows its normal prompt.
   That's the correct default for anything not explicitly denied/blocked/allowed.
 
+## Bump the version or your fix never ships
+
+Claude Code caches installed plugins **by version** at
+`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`. `/plugin marketplace
+update` compares versions: if the pushed `version` equals the installed one it
+reports "already at the latest version" and **does not refetch** — so a fix
+pushed under the same version is invisible to every machine that already
+installed it (the stale cached `hooks.json`/`guardrails.js` keeps running). Any
+change to plugin files MUST bump `version` in **both** `plugin.json` and
+`marketplace.json` (keep them equal). For an already-broken local cache, patch
+the file under the cache path directly for instant relief, then bump+push for
+the durable fix.
+
 ## Name must agree in three places
 
 The plugin name is referenced in `.claude-plugin/marketplace.json`,
