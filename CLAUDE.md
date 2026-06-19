@@ -28,6 +28,11 @@ pipe). Add cases to the `CASES` table in `test/run.js`. Don't reach for
 `{ "hooks": { "PreToolUse": [ … ] } }`. Putting `PreToolUse` at the root fails
 to load with `expected record, received undefined at path ["hooks"]` and the
 plugin silently does nothing. `${CLAUDE_PLUGIN_ROOT}` is the correct path var.
+
+Do **NOT** add `"hooks": "./hooks/hooks.json"` to `plugin.json` — the standard
+path is already auto-loaded, so pointing the manifest at it too loads the file
+twice and errors with `Duplicate hooks file detected`. `manifest.hooks` is only
+for *additional* hook files outside the standard path. We removed that field.
 `test/run.js` spawns `guardrails.js` directly, so it can't catch a wiring break —
 the `wire` checks at the end of that file validate the `hooks.json` shape
 instead. Keep them.
