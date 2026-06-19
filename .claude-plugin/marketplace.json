@@ -1,7 +1,7 @@
 {
   "name": "bash-guardrails",
   "owner": {
-    "name": "recky-ru"
+    "name": "pavel-rp"
   },
   "metadata": {
     "description": "Guardrails that tame Claude Code's permission prompts by enforcing clean, single-purpose shell commands.",

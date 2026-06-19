@@ -36,7 +36,7 @@ run silently.
 ```sh
 # 1. Add this repo as a plugin marketplace (local path or git URL)
 /plugin marketplace add B:/Projects/bash-guardrails
-#   or:  /plugin marketplace add <you>/bash-guardrails   (once pushed to GitHub)
+#   or:  /plugin marketplace add pavel-rp/bash-guardrails   (after the GitHub push)
 
 # 2. Install the plugin (user-level — applies to every project)
 /plugin install bash-guardrails@bash-guardrails
