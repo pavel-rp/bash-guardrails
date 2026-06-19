@@ -1,0 +1,64 @@
+#!/usr/bin/env node
+'use strict';
+
+/**
+ * Self-hosted test runner for the bash-guardrails hook.
+ *
+ * It spawns hooks/guardrails.js and feeds each command as stdin via the
+ * `input` option of spawnSync — NOT a shell pipe — so this runner is itself a
+ * single `node test/run.js` invocation that the plugin auto-allows. That means
+ * you can run the tests even while bash-guardrails is installed and active
+ * (which would otherwise block a `printf … | node …` pipe). See CLAUDE.md.
+ */
+
+const { spawnSync } = require('node:child_process');
+const path = require('node:path');
+
+const HOOK = path.join(__dirname, '..', 'plugins', 'bash-guardrails', 'hooks', 'guardrails.js');
+
+// [label, command, expected decision: 'deny' | 'allow' | 'ask']
+const CASES = [
+  // BLOCK -> deny with guidance
+  ['build blob (cd)',       'cd "B:/x" && pnpm build >/tmp/b.log 2>&1 && echo PASS || { echo FAIL; tail -20 /tmp/b.log; }', 'deny'],
+  ['gh api | tail',         'gh api repos/x/pulls/4/comments | tail -3', 'deny'],
+  ['gh --jq',               'gh pr view 4 --json headRefOid --jq .headRefOid', 'deny'],
+  ['heredoc write',         'cat > .tmp/m.txt <<EOF\nhi\nEOF', 'deny'],
+  ['ls glob',               'ls src/*.ts', 'deny'],
+  ['backtick',              'echo `whoami`', 'deny'],
+
+  // DENY -> destructive
+  ['rm -rf',                'rm -rf dist', 'deny'],
+  ['force push',            'git push --force origin feat', 'deny'],
+  ['push main',             'git push origin main', 'deny'],
+  ['reset --hard',          'git reset --hard HEAD~1', 'deny'],
+  ['chain hides rm',        'pnpm build && rm -rf dist', 'deny'],
+
+  // ALLOW -> safe single commands
+  ['pnpm test',             'pnpm test', 'allow'],
+  ['git add',               'git add src/layout.ts', 'allow'],
+  ['gh pr view --json',     'gh pr view 4 --json headRefOid', 'allow'],
+  ['env-prefixed pnpm',     'NODE_OPTIONS=--max-old-space-size=4096 pnpm type-check', 'allow'],
+  ['push feature branch',   'git push origin feat/gly-4', 'allow'],
+
+  // ASK -> passthrough (empty {})
+  ['chained safe',          'pnpm build && pnpm test', 'ask'],
+  ['unknown command',       'frobnicate --now', 'ask'],
+];
+
+function decisionFor(command) {
+  const payload = JSON.stringify({ tool_name: 'Bash', tool_input: { command } });
+  const res = spawnSync(process.execPath, [HOOK], { input: payload, encoding: 'utf8' });
+  const out = JSON.parse(res.stdout || '{}');
+  return (out.hookSpecificOutput && out.hookSpecificOutput.permissionDecision) || 'ask';
+}
+
+let failed = 0;
+for (const [label, command, expected] of CASES) {
+  const actual = decisionFor(command);
+  const ok = actual === expected;
+  if (!ok) failed++;
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${expected.padEnd(5)} ${ok ? '' : `(got ${actual}) `}${label}`);
+}
+
+console.log(`\n${CASES.length - failed}/${CASES.length} passed`);
+process.exit(failed ? 1 : 0);
