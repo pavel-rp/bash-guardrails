@@ -98,7 +98,7 @@ const BLOCK_RULES = [
   },
   {
     test: (cmd) => /\bjq\b/.test(cmd),
-    reason: 'Do not use `jq` (not guaranteed available). Request JSON (e.g. `gh ... --json`) and parse it with `node -e` using JSON.parse, or read the output with the Read tool.',
+    reason: 'Do not use `jq` (not guaranteed available). Request JSON (e.g. `gh ... --json fields`) and read the returned output directly — you can parse it yourself. Do NOT wrap it in `node -e` to filter/format it: `node -e` is an inline interpreter and will prompt for approval. Run the plain command; if you need just a few fields, narrow them with `--json`.',
   },
   {
     test: (cmd) => /(?<![-/])\b(cat|head|tail)\b/.test(cmd) && !/<</.test(cmd),
