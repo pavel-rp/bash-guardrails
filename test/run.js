@@ -62,6 +62,7 @@ const CASES = [
   ['chain of allowed',      'pnpm build && pnpm test', 'deny'],
   ['chain git+echo',        'git status; git log --oneline -5', 'deny'],
   ['real chained read-only', 'git -C "B:/x" check-ignore -v .claude/settings.local.json; echo "rc=$?"; git -C "B:/x" ls-files .claude/; git -C "B:/x" status --porcelain .claude/', 'deny'],
+  ['bash script + echo $?', 'bash "B:/x/run.sh"; echo "RUNNER_EXIT=$?"', 'deny'],
 
   // ASK -> chains that must NOT be split (control flow / shell state) pass through
   ['control-flow exempt',   'for f in *.ts; do echo $f; done', 'ask'],

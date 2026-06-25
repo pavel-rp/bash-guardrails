@@ -89,6 +89,15 @@ const BLOCK_RULES = [
     reason: 'Do not chain commands with `;`/`&&`. Run each as a SEPARATE Bash call — every known-safe command auto-approves on its own, so splitting removes the permission prompt entirely. Independent calls can be sent in one message to run in parallel.',
   },
   {
+    // `cmd; echo "...$?"` — Claude appends an exit-code probe to be sure of
+    // pass/fail. The Bash tool already returns the exit status, so it's pure
+    // noise AND it turns an otherwise-single command into a chain that can't
+    // auto-approve (and splits the "don't ask again" allowlist onto the useless
+    // echo half). Steer Claude to drop it.
+    test: (cmd) => /(?:;|&&)\s*echo\b[^\n]*\$\?/.test(cmd),
+    reason: 'Do not append `; echo "...$?"` to read the exit code — the Bash tool already reports it. Run the command on its own.',
+  },
+  {
     test: (cmd) => /(^|;|&&|\|\|)\s*cd\s+/.test(cmd),
     reason: 'Do not use `cd` — the working directory persists between Bash calls. Use a relative or absolute path instead.',
   },
@@ -98,7 +107,7 @@ const BLOCK_RULES = [
   },
   {
     test: (cmd) => /\bjq\b/.test(cmd),
-    reason: 'Do not use `jq` (not guaranteed available). Request JSON (e.g. `gh ... --json fields`) and read the returned output directly — you can parse it yourself. Do NOT wrap it in `node -e` to filter/format it: `node -e` is an inline interpreter and will prompt for approval. Run the plain command; if you need just a few fields, narrow them with `--json`.',
+    reason: 'Do not use `jq`. JSON output is plain text — run the command without it and read/parse the JSON yourself; you do not need any tool to parse JSON. Do NOT reach for an inline interpreter instead (`node -e`, `python -c`, `node --eval`, `perl/ruby -e`) — those are demoted to a permission prompt and are slower, so they are strictly worse than just reading the output. To shrink large output, narrow it at the source (e.g. `gh ... --json field1,field2`), then read the result.',
   },
   {
     test: (cmd) => /(?<![-/])\b(cat|head|tail)\b/.test(cmd) && !/<</.test(cmd),
