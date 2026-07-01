@@ -24,7 +24,7 @@ const CASES = [
   // BLOCK -> deny with guidance
   ['build blob (cd)',       'cd "B:/x" && pnpm build >/tmp/b.log 2>&1 && echo PASS || { echo FAIL; tail -20 /tmp/b.log; }', 'deny'],
   ['gh api | tail',         'gh api repos/x/pulls/4/comments | tail -3', 'deny'],
-  ['gh --jq',               'gh pr view 4 --json headRefOid --jq .headRefOid', 'deny'],
+  ['gh --jq now allowed',   'gh pr view 4 --json headRefOid --jq .headRefOid', 'allow'],
   ['heredoc write',         'cat > .tmp/m.txt <<EOF\nhi\nEOF', 'deny'],
   ['ls glob',               'ls src/*.ts', 'deny'],
   ['backtick',              'echo `whoami`', 'deny'],
@@ -57,6 +57,7 @@ const CASES = [
   ['node script file',      'node build.js', 'allow'],
   ['find by name',          'find src -name "*.ts"', 'allow'],
   ['push refspec',          'git push origin local:remote', 'allow'],
+  ['bare jq',               'jq .headRefOid pr.json', 'allow'],
 
   // BLOCK -> chain of allow-listed commands, split into separate calls
   ['chain of allowed',      'pnpm build && pnpm test', 'deny'],

@@ -10,7 +10,7 @@ command:
 | Decision | What | Examples |
 |----------|------|----------|
 | **DENY** | Hard-block destructive ops | `rm -rf` (incl. `/bin/rm -rf`), `find -delete`, `find -exec rm`, `dd`, `mkfs`, fork bombs, `git push --force`, `git reset --hard`, `git clean -f`, `git checkout -- .`, `git branch -D`, `git push --delete`/`:branch`/`--mirror`, push to `main`/`master` |
-| **BLOCK** | Reject obfuscation-prone compound commands **with an instructive reason**, so Claude rewrites them cleanly | pipes `\|`, redirects `>`, `cd`, heredocs `<<`, `jq`, `cat`/`head`/`tail`, backticks, appended `; echo "…$?"` exit-code probes |
+| **BLOCK** | Reject obfuscation-prone compound commands **with an instructive reason**, so Claude rewrites them cleanly | pipes `\|`, redirects `>`, `cd`, heredocs `<<`, `cat`/`head`/`tail`, backticks, appended `; echo "…$?"` exit-code probes |
 | **ALLOW** | Auto-approve known-safe dev commands | `git`, `gh`, `pnpm`, `npm`, `npx`, `node`, `ls`, `grep`, `mkdir`, `echo`, … |
 
 A `;`/`&&` **chain of allow-listed commands** is blocked too, with guidance to
