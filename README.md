@@ -9,8 +9,8 @@ command:
 
 | Decision | What | Examples |
 |----------|------|----------|
-| **DENY** | Hard-block destructive ops | `rm -rf` (incl. `/bin/rm -rf`), `find -delete`, `find -exec rm`, `git push --force`, `git reset --hard`, `git clean -f`, `git push --delete`/`:branch`/`--mirror`, push to `main`/`master` |
-| **BLOCK** | Reject obfuscation-prone compound commands **with an instructive reason**, so Claude rewrites them cleanly | pipes `\|`, redirects `>`, `cd`, heredocs `<<`, `jq`, `cat`/`head`/`tail`, backticks |
+| **DENY** | Hard-block destructive ops | `rm -rf` (incl. `/bin/rm -rf`), `find -delete`, `find -exec rm`, `dd`, `mkfs`, fork bombs, `git push --force`, `git reset --hard`, `git clean -f`, `git checkout -- .`, `git branch -D`, `git push --delete`/`:branch`/`--mirror`, push to `main`/`master` |
+| **BLOCK** | Reject obfuscation-prone compound commands **with an instructive reason**, so Claude rewrites them cleanly | pipes `\|`, redirects `>`, `cd`, heredocs `<<`, `cat`/`head`/`tail`, backticks, appended `; echo "…$?"` exit-code probes |
 | **ALLOW** | Auto-approve known-safe dev commands | `git`, `gh`, `pnpm`, `npm`, `npx`, `node`, `ls`, `grep`, `mkdir`, `echo`, … |
 
 A `;`/`&&` **chain of allow-listed commands** is blocked too, with guidance to
@@ -55,31 +55,49 @@ pipeline, so a recursive delete hidden after a `|` is still caught.
 
 ## Install
 
+Run these two slash commands inside Claude Code:
+
 ```sh
-# 1. Add this repo as a plugin marketplace (local path or git URL)
-/plugin marketplace add B:/Projects/bash-guardrails
-#   or:  /plugin marketplace add pavel-rp/bash-guardrails   (after the GitHub push)
+# 1. Add the GitHub repo as a plugin marketplace
+/plugin marketplace add pavel-rp/bash-guardrails
 
 # 2. Install the plugin (user-level — applies to every project)
 /plugin install bash-guardrails@bash-guardrails
 ```
 
+`/plugin marketplace add` fetches straight from GitHub — no clone needed. The
+same two commands work on any machine.
+
 Restart Claude Code (or open `/hooks` once) so the hook loads — hooks are not
 hot-reloaded mid-session.
 
-On another machine, run the same two commands after cloning/adding the repo.
+### Updating
+
+```sh
+/plugin marketplace update bash-guardrails
+```
+
+Plugins are cached **by version**, so an update only refetches when the repo's
+`version` is higher than the installed one. If a machine reports "already at the
+latest version" but you expect changes, the version wasn't bumped.
 
 ## Customize
 
 All rules live in [`plugins/bash-guardrails/hooks/guardrails.js`](plugins/bash-guardrails/hooks/guardrails.js)
 as readable arrays:
 
-- `DENY_RULES` — destructive patterns (add your own).
+- `DENY_RULES` / `GIT_DENY_RULES` — destructive patterns (add your own).
 - `BLOCK_RULES` — obfuscation-prone patterns + the guidance Claude receives.
 - `ALLOW_COMMANDS` — the auto-approved leading commands.
+- `NEVER_AUTO_ALLOW` — allow-listed tools whose dangerous forms are demoted to a
+  prompt (inline interpreters, `find -exec`, `chmod -R`).
+- `PS_*` — the PowerShell equivalents of each tier.
 
-Edit, save, restart. To loosen a rule (e.g. allow pipes), delete it from
-`BLOCK_RULES`.
+To tune the rules, fork [`pavel-rp/bash-guardrails`](https://github.com/pavel-rp/bash-guardrails),
+edit the arrays, bump `version` in both `plugin.json` and `marketplace.json`, and
+add your fork as the marketplace instead. To loosen a rule (e.g. allow pipes),
+delete it from `BLOCK_RULES`. Restart Claude Code after any change — hooks aren't
+hot-reloaded.
 
 ## Trade-offs
 

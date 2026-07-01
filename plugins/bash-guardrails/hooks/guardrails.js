@@ -7,7 +7,7 @@
  * Why this exists
  * ---------------
  * Claude Code prompts for permission constantly because Claude tends to write
- * gnarly compound shell commands — heredocs, pipes, redirects, `cd`, `jq`,
+ * gnarly compound shell commands — heredocs, pipes, redirects, `cd`,
  * `&& echo PASS || { ... }` blocks. Those blobs (a) trip Claude Code's BUILT-IN
  * obfuscation detector, which fires BEFORE any allowlist and cannot be silenced
  * by a `Bash(...)` allow rule, and (b) don't match simple allowlist prefixes
@@ -21,7 +21,7 @@
  *            Hard-blocked. `permissionDecision: "deny"` is enforced even under
  *            --dangerously-skip-permissions.
  *
- *   BLOCK  — obfuscation-prone patterns (pipes, redirects, cd, heredocs, jq,
+ *   BLOCK  — obfuscation-prone patterns (pipes, redirects, cd, heredocs,
  *            cat/head/tail, backticks). Also returned as "deny", but the reason
  *            is instructive: it tells Claude to rewrite the command as clean,
  *            single-purpose calls and to use the Read/Write/Glob tools. Claude
@@ -32,7 +32,7 @@
  *
  * Anything else falls through to Claude Code's normal permission prompt.
  *
- * Net effect: Claude stops emitting `gh api ... --jq ... | tail` and heredoc
+ * Net effect: Claude stops emitting `gh api ... | tail` pipes and heredoc
  * blobs, and instead runs `pnpm test`, `git add`, `gh pr view --json` as
  * separate calls — each of which auto-approves silently.
  *
@@ -106,10 +106,6 @@ const BLOCK_RULES = [
     reason: 'Do not use heredocs (`<<`). They trip the obfuscation detector and silently mangle content (e.g. backticks). To write a file, use the Write tool.',
   },
   {
-    test: (cmd) => /\bjq\b/.test(cmd),
-    reason: 'Do not use `jq`. JSON output is plain text — run the command without it and read/parse the JSON yourself; you do not need any tool to parse JSON. Do NOT reach for an inline interpreter instead (`node -e`, `python -c`, `node --eval`, `perl/ruby -e`) — those are demoted to a permission prompt and are slower, so they are strictly worse than just reading the output. To shrink large output, narrow it at the source (e.g. `gh ... --json field1,field2`), then read the result.',
-  },
-  {
     test: (cmd) => /(?<![-/])\b(cat|head|tail)\b/.test(cmd) && !/<</.test(cmd),
     reason: 'Do not use cat/head/tail to read files. Use the Read tool — it is faster and does not trip the shell-safety detector.',
   },
@@ -156,6 +152,8 @@ const ALLOW_COMMANDS = new Set([
   // read-only / harmless shell builtins & utils
   'ls', 'dir', 'pwd', 'echo', 'grep', 'rg', 'find', 'wc', 'mkdir',
   'which', 'where', 'true', 'false', 'date', 'env', 'printenv',
+  // json processing (read-only; a `> file` redirect is still blocked)
+  'jq',
 ]);
 
 // Chaining operators that, if present, mean we should NOT auto-approve (we
