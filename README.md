@@ -9,9 +9,18 @@ command:
 
 | Decision | What | Examples |
 |----------|------|----------|
-| **DENY** | Hard-block destructive ops | `rm -rf` (incl. `/bin/rm -rf`), `find -delete`, `find -exec rm`, `dd`, `mkfs`, fork bombs, `git push --force`, `git reset --hard`, `git clean -f`, `git checkout -- .`, `git branch -D`, `git push --delete`/`:branch`/`--mirror`, push to `main`/`master` |
-| **BLOCK** | Reject obfuscation-prone compound commands **with an instructive reason**, so Claude rewrites them cleanly | pipes `\|`, redirects `>`, `cd`, heredocs `<<`, `cat`/`head`/`tail`, backticks, appended `; echo "…$?"` exit-code probes |
-| **ALLOW** | Auto-approve known-safe dev commands | `git`, `gh`, `pnpm`, `npm`, `npx`, `node`, `ls`, `grep`, `mkdir`, `echo`, … |
+| **DENY** | Hard-block destructive ops | `rm -rf` (incl. `/bin/rm -rf`), `find -delete`, `find -exec rm`, `dd`, `mkfs`, fork bombs, `git push --force` (incl. `+refspec`), `git reset --hard`, `git clean -f`, `git checkout <path>` / `git restore <path>` (discards changes), `git stash drop`/`clear`, `git branch -D`/`--delete --force`, `git push --delete`/`:branch`/`--mirror`, push to `main`/`master` |
+| **BLOCK** | Reject obfuscation-prone compound commands **with an instructive reason**, so Claude rewrites them cleanly | pipes `\|`, redirects `>`, `cd`, heredocs `<<`, `cat`/`head`/`tail` in command position, backticks outside single quotes, appended `; echo "…$?"` exit-code probes |
+| **ALLOW** | Auto-approve known-safe dev commands | `git`, `gh`, `pnpm`, `npm`, `node`, `ls`, `grep`, `mkdir`, `echo`, … |
+
+BLOCK and ALLOW decisions are **quote-aware**: the contents of quoted strings
+are masked before the pattern rules run, so `git commit -m "feat: a | b"` or
+`grep "tail" src/app.js` are not mistaken for a pipe or a file read. Bash
+double quotes keep backticks and `$` expansions live (as bash itself does) —
+a backtick inside a double-quoted message is still blocked because it really
+would substitute; put literal backticks in **single quotes** instead. The DENY
+scan stays quote-blind on purpose: there a false positive costs a prompt, an
+oversight costs data.
 
 A `;`/`&&` **chain of allow-listed commands** is blocked too, with guidance to
 run the parts as separate calls (each then auto-approves silently). Chains that
@@ -21,9 +30,10 @@ genuinely need one shell — control flow (`for …; do …; done`) or shell sta
 Everything else falls through to Claude Code's normal permission prompt — the
 **ask** tier. The dangerous *forms* of otherwise-allowed tools are deliberately
 demoted here rather than auto-approved: inline interpreters (`node -e`,
-`python -c`, `perl -e`, `bun -e`, `deno eval`), `find -exec`, and `chmod`/`chown
--R`. They're useful but can do anything, so they prompt instead of running
-silently.
+`python -c`, `perl -e`, `bun -e`, `deno eval`), package runners that execute an
+arbitrary package (`npx`, `bunx`, `pnpm dlx`, `yarn dlx`, `npm exec`),
+`find -exec`, and `chmod`/`chown -R`. They're useful but can do anything, so
+they prompt instead of running silently.
 
 ## Why it works
 
@@ -47,11 +57,14 @@ run silently.
 On Windows the agent reaches for a separate **PowerShell** tool, so the hook
 covers it too (matcher `Bash|PowerShell`). The PowerShell tier denies
 `Remove-Item -Recurse`, `gci -Recurse | Remove-Item`, `Clear-Content`, disk
-formats, and the shared destructive git ops; steers `Out-File`/`Set-Content`/`>`
-to the Write tool; and auto-approves read-only cmdlets (`Get-ChildItem`,
-`Select-String`, …) and dev tools. Unlike Bash, the object pipeline `|` is **not**
-blocked — it's idiomatic in PowerShell — but the deny scan still reads the whole
-pipeline, so a recursive delete hidden after a `|` is still caught.
+formats, and the shared destructive git ops; steers `Out-File`/`Set-Content`/
+`New-Item -Value`/`>` to the Write tool; and auto-approves read-only cmdlets
+(`Get-ChildItem`, `Select-String`, …) and dev tools. Unlike Bash, the object
+pipeline `|` is **not** blocked — it's idiomatic in PowerShell — but the deny
+scan still reads the whole pipeline (so a recursive delete hidden after a `|`
+is caught), and piping into an external interpreter (`… | node x.js`) is
+demoted to a prompt: the pipeline exemption is for typed cmdlet flow, not for
+feeding scripts.
 
 ## Install
 
@@ -90,7 +103,8 @@ as readable arrays:
 - `BLOCK_RULES` — obfuscation-prone patterns + the guidance Claude receives.
 - `ALLOW_COMMANDS` — the auto-approved leading commands.
 - `NEVER_AUTO_ALLOW` — allow-listed tools whose dangerous forms are demoted to a
-  prompt (inline interpreters, `find -exec`, `chmod -R`).
+  prompt (inline interpreters, package runners like `npx`/`pnpm dlx`,
+  `find -exec`, `chmod -R`).
 - `PS_*` — the PowerShell equivalents of each tier.
 
 To tune the rules, fork [`pavel-rp/bash-guardrails`](https://github.com/pavel-rp/bash-guardrails),
@@ -109,13 +123,15 @@ hot-reloaded.
   `node build.js` and `python script.py` still auto-approve. Add forms to
   `NEVER_AUTO_ALLOW` to demote more; remove `node`/`npx` from `ALLOW_COMMANDS`
   to make them always prompt.
-- **Regex, not a shell parser — and not a security boundary.** This is a
-  friction-reducer and mistake-catcher, not adversary-proof. A determined bypass
-  (path aliasing, base64, `bash -c`, writing a script to disk) can defeat any
-  in-process command filter; the real boundary is git's recoverability plus, if
-  you need it, an OS sandbox. A few false positives are intentional (e.g.
-  `node -e "a > b"` is blocked because `>` looks like redirection); the cost is a
-  rewrite, not a wrong execution.
+- **Regex over a quote-masked string, not a shell parser — and not a security
+  boundary.** This is a friction-reducer and mistake-catcher, not
+  adversary-proof. A determined bypass (path aliasing, base64, `bash -c`,
+  writing a script to disk) can defeat any in-process command filter; the real
+  boundary is git's recoverability plus, if you need it, an OS sandbox. The
+  remaining false positives are deliberately conservative: the DENY scan is
+  quote-blind (a commit message quoting `rm -rf` is still denied), and
+  unbalanced quotes disable masking entirely — in both cases the cost is a
+  rewrite or a prompt, never a wrong execution.
 
 ## Layout
 

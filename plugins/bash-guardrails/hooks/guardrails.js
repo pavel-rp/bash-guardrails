@@ -52,10 +52,25 @@ const GIT_DENY_RULES = [
   { pattern: /\bgit\s+push\b[^\n]*\s(?:--delete\b|-d\b)/i, reason: 'deleting a remote branch (git push --delete) is blocked.' },
   { pattern: /\bgit\s+push\b[^\n]*\s:[^\s/]/i,         reason: 'deleting a remote branch (git push origin :branch) is blocked.' },
   { pattern: /\bgit\s+push\b[^\n]*--mirror\b/i,        reason: 'git push --mirror can delete remote refs and is blocked.' },
+  // A leading `+` on a refspec forces exactly like --force and must not dodge
+  // the force rule above. `\s\+` requires the plus to START a token, so branch
+  // names merely containing `+` (c++-fix) still pass.
+  { pattern: /\bgit\s+push\b[^\n]*\s\+\S/,            reason: 'force-push via +refspec (git push origin +branch) is blocked.' },
   { pattern: /\bgit\s+reset\s+--hard\b/i,             reason: 'git reset --hard discards work and is blocked.' },
   { pattern: /\bgit\s+clean\s+(-\S+\s+)*-\S*f/i,      reason: 'git clean -f deletes untracked files and is blocked.' },
-  { pattern: /\bgit\s+checkout\s+--\s+\./,            reason: 'git checkout -- . discards all local changes and is blocked.' },
+  { pattern: /\bgit\s+stash\s+(?:drop|clear)\b/i,     reason: 'git stash drop/clear permanently discards stashed work and is blocked.' },
+  // Worktree-discarding restore/checkout. The dot must directly follow the
+  // subcommand (or `--`), so `git restore --staged .` — an unstage that keeps
+  // the worktree — still auto-allows. Dot-leading checkout args are always
+  // pathspecs (refs cannot start with a dot), i.e. a discard, never a switch.
+  { pattern: /\bgit\s+restore\s+(?:--\s+)?\./,        reason: 'git restore <path> discards local changes and is blocked.' },
+  { pattern: /\bgit\s+restore\b[^\n]*\s(?:--worktree|-W)\b/, reason: 'git restore --worktree discards local changes and is blocked.' },
+  { pattern: /\bgit\s+checkout\s+(?:--\s+)?\./,       reason: 'git checkout <path> discards local changes and is blocked.' },
   { pattern: /\bgit\s+branch\s+-D\b/,                 reason: 'force-deleting a branch (git branch -D) is blocked.' },
+  // Same op spelled differently: --delete + --force in either order, or a
+  // combined short flag carrying both letters (-fd, -df, -f -d). Two
+  // lookaheads = "a delete-ish token AND a force-ish token both present".
+  { pattern: /\bgit\s+branch\b(?=[^\n]*(?:--delete\b|\s-[a-z]*d))(?=[^\n]*(?:--force\b|\s-[a-z]*f))/i, reason: 'force-deleting a branch (git branch --delete --force / -fd) is blocked.' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -106,16 +121,22 @@ const BLOCK_RULES = [
     reason: 'Do not use heredocs (`<<`). They trip the obfuscation detector and silently mangle content (e.g. backticks). To write a file, use the Write tool.',
   },
   {
-    test: (cmd) => /(?<![-/])\b(cat|head|tail)\b/.test(cmd) && !/<</.test(cmd),
+    // Command position only: leading the string or right after |, ;, &, `(`,
+    // a backtick, or `$(` — and followed by whitespace/end. `git add cat.png`
+    // and `git mv head.svg logo.svg` are arguments, not invocations.
+    test: (cmd) => /(^|[|;&`(]|\$\()\s*(cat|head|tail)(?=\s|$)/.test(cmd),
     reason: 'Do not use cat/head/tail to read files. Use the Read tool — it is faster and does not trip the shell-safety detector.',
   },
   {
+    // Runs on the RAW string (see `raw` flag): the pattern lives inside
+    // `node -e "…"` quotes, which masking strips.
+    raw: true,
     test: (cmd) => /=>\s*\(\s*\{/.test(cmd),
     reason: 'Arrow functions written as `=>({...})` look like process substitution to the safety detector. Use `=>{ return {...} }` instead.',
   },
   {
     test: (cmd) => /`/.test(cmd),
-    reason: 'Backticks look like command substitution and are blocked. To write file content that contains backticks, use the Write tool.',
+    reason: 'Backticks ARE command substitution in bash — even inside double quotes. For literal backticks (e.g. in a commit message), use single quotes around the text; for file content, use the Write tool.',
   },
   {
     test: (cmd) => /\$\w+.*[<>]|[<>].*\$\w+/.test(cmd),
@@ -180,6 +201,13 @@ const NEVER_AUTO_ALLOW = [
   /\bch(?:mod|own)\b[^\n]*\s-[a-z]*R\b/i,
 ];
 
+// Package runners execute an arbitrary (possibly just-downloaded) package —
+// `npx rimraf dist` is the same class of hole as `node -e`, so it must prompt,
+// not auto-run. Checked against the LEADING token / leading subcommand (not a
+// whole-string regex) so a commit message mentioning "npx" doesn't demote.
+const EXEC_RUNNER_TOKENS = new Set(['npx', 'bunx']);
+const PKG_EXEC_SUBCOMMAND = /^\s*(?:\w+=(?:"[^"]*"|'[^']*'|\S+)\s+)*(?:pnpm|yarn|npm)\s+(?:dlx|exec)\b/i;
+
 /**
  * Strip leading `VAR=value` env assignments, then return the base name of the
  * first token. e.g. `NODE_OPTIONS=--max-old-space-size=4096 pnpm test`
@@ -190,6 +218,70 @@ function leadingCommand(command) {
   const match = withoutEnv.match(/^\s*(\S+)/);
   if (!match) return '';
   return match[1].split(/[\\/]/).pop().toLowerCase();
+}
+
+/**
+ * Blank out the CONTENTS of quoted strings so the pattern rules stop firing on
+ * quoted text — `git commit -m "feat: a | b"` is not a pipe, `grep "tail" f`
+ * is not a file read. What stays in the masked string:
+ *   - bash double quotes: backticks, `$(`, and `$name`/`${…}`/`$?` expansions
+ *     are still SHELL-ACTIVE inside double quotes, so they are kept — a
+ *     backtick in a double-quoted commit message really would substitute.
+ *   - single quotes (both shells) are fully literal: contents dropped.
+ *   - PowerShell double quotes: `-escapes handled, `$…` kept (still expands).
+ * Unbalanced quotes → return the string unmasked. That's the conservative
+ * direction: identical to the pre-masking hook, which can only over-block.
+ *
+ * DENY rules deliberately keep scanning the RAW string; masking is only for
+ * the guidance/allow tiers, where a false positive costs a prompt, not data.
+ */
+function maskQuotes(command, shell) {
+  let out = '';
+  for (let i = 0; i < command.length; ) {
+    const ch = command[i];
+    if (shell === 'bash' && ch === '\\') { out += command.slice(i, i + 2); i += 2; continue; }
+    if (ch === "'") {
+      let j = i + 1;
+      while (j < command.length) {
+        if (command[j] === "'") {
+          if (shell === 'ps' && command[j + 1] === "'") { j += 2; continue; } // '' = escaped quote in PS
+          break;
+        }
+        j++;
+      }
+      if (j >= command.length) return command; // unbalanced
+      out += "''";
+      i = j + 1;
+      continue;
+    }
+    if (ch === '"') {
+      let j = i + 1;
+      let kept = '';
+      while (j < command.length && command[j] !== '"') {
+        const c = command[j];
+        if (shell === 'bash' && c === '\\') { j += 2; continue; }
+        if (shell === 'ps' && c === '`') { j += 2; continue; }
+        if (c === '`') { kept += '`'; j++; continue; }
+        if (c === '$') {
+          kept += '$';
+          j++;
+          while (j < command.length && command[j] !== '"' && /[\w?{}()]/.test(command[j])) {
+            kept += command[j];
+            j++;
+          }
+          continue;
+        }
+        j++;
+      }
+      if (j >= command.length) return command; // unbalanced
+      out += '"' + kept + '"';
+      i = j + 1;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
 }
 
 /**
@@ -209,10 +301,13 @@ function isSplittableChain(command, tokenAllowed) {
   return segments.every((seg) => tokenAllowed(leadingCommand(seg)));
 }
 
-function isAutoApprovable(command) {
-  if (HAS_CHAIN.test(command)) return false;
-  if (NEVER_AUTO_ALLOW.some((re) => re.test(command))) return false;
-  return ALLOW_COMMANDS.has(leadingCommand(command));
+function isAutoApprovable(command, masked) {
+  if (HAS_CHAIN.test(masked)) return false;   // masked: a `;` inside a commit message is not a chain
+  if (NEVER_AUTO_ALLOW.some((re) => re.test(command))) return false; // raw: a false hit here only costs a prompt
+  const token = leadingCommand(command);
+  if (EXEC_RUNNER_TOKENS.has(token)) return false;
+  if (PKG_EXEC_SUBCOMMAND.test(command)) return false;
+  return ALLOW_COMMANDS.has(token);
 }
 
 // ===========================================================================
@@ -252,6 +347,11 @@ const PS_GUIDANCE_RULES = [
   {
     test: (cmd) => /(^|[\s;|(=])(?:Out-File|Set-Content|Add-Content|Tee-Object|tee)\b/i.test(cmd),
     reason: 'Do not write files with Out-File/Set-Content/Add-Content. Use the Write tool.',
+  },
+  {
+    // New-Item is allow-listed for mkdir, but `-Value` makes it a file write.
+    test: (cmd) => /(^|[\s;|(=])(?:New-Item|ni)\b[^;\n]*\s-Value\b/i.test(cmd),
+    reason: 'Do not write file contents with New-Item -Value. Use the Write tool.',
   },
   {
     test: (cmd) => /[0-9]*>[^&]/.test(cmd),
@@ -294,6 +394,9 @@ const PS_ALLOW = new Set([
 // cmdlet is on PS_ALLOW (e.g. a safe `gci` piped into a mutating cmdlet, or a
 // scriptblock that runs arbitrary code). They fall through to a prompt.
 const PS_NEVER_AUTO = [
+  // Text piped into an external interpreter/shell. The object-pipeline
+  // exemption is for typed cmdlet flow — feeding a script is not that.
+  /\|\s*(?:node|python|python3|perl|ruby|bun|deno|bash|sh|cmd|pwsh|powershell)(?:\.exe)?\b/i,
   /\b(?:iex|Invoke-Expression|icm|Invoke-Command|Invoke-Item|Add-Type)\b/i,
   /\b(?:saps|Start-Process)\b/i,
   /\b(?:iwr|Invoke-WebRequest|irm|Invoke-RestMethod|Start-BitsTransfer|curl|wget)\b/i,
@@ -308,11 +411,13 @@ const PS_NEVER_AUTO = [
   /\bNew-Item\b[^;\n]*\s-Force\b/i,      // New-Item -Force can truncate an existing file
 ];
 
-function isAutoApprovablePS(command) {
-  if (HAS_CHAIN.test(command)) return false;                         // && or ; — can't vouch for the 2nd statement
+function isAutoApprovablePS(command, masked) {
+  if (HAS_CHAIN.test(masked)) return false;                          // masked: `;` inside a string is not a chain
   if (NEVER_AUTO_ALLOW.some((re) => re.test(command))) return false; // shared: node -e, python -c, …
   if (PS_NEVER_AUTO.some((re) => re.test(command))) return false;
   const token = leadingCommand(command);
+  if (EXEC_RUNNER_TOKENS.has(token)) return false;
+  if (PKG_EXEC_SUBCOMMAND.test(command)) return false;
   return PS_ALLOW.has(token) || ALLOW_COMMANDS.has(token);
 }
 
@@ -332,34 +437,40 @@ function emit(permissionDecision, permissionDecisionReason) {
 }
 
 function decideBash(command) {
+  // DENY scans the raw string (conservative: a quoted "rm -rf" over-blocks,
+  // never under-blocks). Guidance + allow tiers see the quote-masked string
+  // so quoted text (commit messages, grep patterns) can't trip them.
+  const masked = maskQuotes(command, 'bash');
   for (const rule of DENY_RULES) {
     if (rule.pattern.test(command)) {
       return emit('deny', `BLOCKED (dangerous): ${rule.reason}`);
     }
   }
   for (const rule of BLOCK_RULES) {
-    if (rule.test(command)) {
+    if (rule.test(rule.raw ? command : masked)) {
       return emit('deny', `BLOCKED: ${rule.reason}`);
     }
   }
-  if (isAutoApprovable(command)) {
+  if (isAutoApprovable(command, masked)) {
     return emit('allow', 'Auto-approved by bash-guardrails (known-safe dev command).');
   }
   return passthrough();
 }
 
 function decidePowershell(command) {
+  // Same split as decideBash: deny on raw, guidance/allow on masked.
+  const masked = maskQuotes(command, 'ps');
   for (const rule of PS_DENY_RULES) {
     if (rule.pattern.test(command)) {
       return emit('deny', `BLOCKED (dangerous): ${rule.reason}`);
     }
   }
   for (const rule of PS_GUIDANCE_RULES) {
-    if (rule.test(command)) {
+    if (rule.test(rule.raw ? command : masked)) {
       return emit('deny', `BLOCKED: ${rule.reason}`);
     }
   }
-  if (isAutoApprovablePS(command)) {
+  if (isAutoApprovablePS(command, masked)) {
     return emit('allow', 'Auto-approved by bash-guardrails (known-safe PowerShell command).');
   }
   return passthrough();
