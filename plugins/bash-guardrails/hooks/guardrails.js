@@ -240,6 +240,12 @@ function maskQuotes(command, shell) {
   for (let i = 0; i < command.length; ) {
     const ch = command[i];
     if (shell === 'bash' && ch === '\\') { out += command.slice(i, i + 2); i += 2; continue; }
+    // PS backtick escapes the NEXT char even outside a string — e.g. `abc`"def`
+    // is the literal bareword `abc"def`, not a string open. Without this, the
+    // loop below would misread that `"` as a real string delimiter and pair it
+    // with a LATER, unrelated `"`, masking away everything between them —
+    // including a real `;` or a dangerous command hidden in that span.
+    if (shell === 'ps' && ch === '`') { out += command.slice(i, i + 2); i += 2; continue; }
     if (ch === "'") {
       let j = i + 1;
       while (j < command.length) {

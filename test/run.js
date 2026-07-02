@@ -67,6 +67,7 @@ const CASES = [
   ['checkout dot',          'git checkout .', 'deny'],
   ['branch --delete --force','git branch --delete --force old', 'deny'],
   ['branch -fd',            'git branch -fd old', 'deny'],
+  ['branch -df',            'git branch -df old', 'deny'],
 
   // ASK -> dangerous form of an allowed tool (demoted from auto-allow)
   ['node -e rmSync',        'node -e "require(\'fs\').rmSync(process.env.HOME,{recursive:true})"', 'ask'],
@@ -122,6 +123,11 @@ const CASES = [
 
   // ALLOW -> quote-masking (PS strings are not statement separators)
   ['ps semicolon in msg',     'git commit -m "fix: a; then b"', 'allow', 'PowerShell'],
+
+  // DENY -> a backtick-escaped quote OUTSIDE any string must not be read as a
+  // real string-open, or the masker pairs it with a LATER unrelated quote and
+  // blanks everything between — hiding a real `;` and the command after it.
+  ['ps backtick-escaped quote hides chain', 'Get-ChildItem abc`"; npx rimraf C:\\important"', 'deny', 'PowerShell'],
 
   // ASK -> dangerous/arbitrary-code form (demoted from auto-allow)
   ['ps iex',                  'Invoke-Expression $payload', 'ask', 'PowerShell'],
