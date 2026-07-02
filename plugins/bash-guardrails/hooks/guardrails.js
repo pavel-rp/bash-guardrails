@@ -85,7 +85,7 @@ const GIT_NEVER_AUTO_ALLOW = [
   /\bgit\s+reflog\s+(?:expire|delete)\b/i,
   /\bgit\s+gc\b[^\n]*(?:--prune=now\b|--aggressive\b)/i,
   /\bgit\s+filter-(?:branch|repo)\b/i,
-  /\bgit\s+worktree\s+remove\b[^\n]*--force\b/i,
+  /\bgit\s+worktree\s+remove\b[^\n]*(?:--force\b|\s-[a-z]*f\b)/i,
 ];
 
 // ---------------------------------------------------------------------------
@@ -229,7 +229,7 @@ const NEVER_AUTO_ALLOW = [
   /\bch(?:mod|own)\b[^\n]*\s-[a-z]*R\b/i,
   // mv silently overwrites an existing destination with -f; only the bare
   // (non-force) form is safe to auto-run. Paired with `mv` on ALLOW_COMMANDS.
-  /\bmv\b[^\n]*\s-[a-z]*f\b/i,
+  /\bmv\b[^\n]*\s(?:--force\b|-[a-z]*f\b)/i,
   ...GIT_NEVER_AUTO_ALLOW,
 ];
 
