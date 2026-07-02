@@ -222,6 +222,33 @@ try {
   wiringCheck(`hooks.json parses (${err.message})`, false);
 }
 
-const total = CASES.length + 4;
+// Rule-id uniqueness (Phase 2, docs/IMPROVEMENT_PLAN.md). Every entry across
+// the decision-time arrays must carry an id + tier. Git rules are spread by
+// reference into BOTH the Bash and PowerShell arrays on purpose, so the same
+// id legitimately appears twice — that's only a real collision if two
+// DIFFERENT rule objects claim the same id.
+try {
+  const mod = require(HOOK);
+  const allArrays = [
+    mod.DENY_RULES, mod.BLOCK_RULES, mod.NEVER_AUTO_ALLOW,
+    mod.PS_DENY_RULES, mod.PS_GUIDANCE_RULES, mod.PS_NEVER_AUTO,
+  ];
+  let idsPresent = true;
+  let idsUnique = true;
+  const seen = new Map();
+  for (const arr of allArrays) {
+    for (const rule of arr) {
+      if (!rule.id || !rule.tier) idsPresent = false;
+      if (seen.has(rule.id) && seen.get(rule.id) !== rule) idsUnique = false;
+      seen.set(rule.id, rule);
+    }
+  }
+  wiringCheck('every rule has an id + tier', idsPresent);
+  wiringCheck('rule ids are unique', idsUnique);
+} catch (err) {
+  wiringCheck(`rule modules load (${err.message})`, false);
+}
+
+const total = CASES.length + 6;
 console.log(`\n${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);
