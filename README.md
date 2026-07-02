@@ -149,6 +149,26 @@ file, unreadable, malformed JSON, unknown `version` — silently falls back to
 the built-in defaults; **nothing in the failure path produces a silent
 allow**. See `docs/research/04_config.md` for the full design rationale.
 
+## Tune from your own usage (`/bash-guardrails:tune-rules`)
+
+The plugin ships a skill that turns your real usage into tuning proposals.
+Invoke `/bash-guardrails:tune-rules` (or ask Claude to "check if any new
+guardrail rules should be added"): a bundled analyzer mines your local Claude
+Code transcripts read-only (last 30 days by default), replays every unique
+shell command through the current hook, and reports
+
+- **ALLOW candidates** — commands that keep hitting the ask tier, ranked by
+  frequency × project spread (nested shells and inline-eval forms are
+  excluded by design, however often they prompt);
+- **false-positive review** — what each BLOCK rule actually caught, so quoted
+  strings/filenames misread as shell syntax surface as fixable bugs;
+- **deny evidence** — commands you manually rejected;
+- **steering effectiveness** — per BLOCK rule, how often Claude successfully
+  rewrote after the guidance, flagging rules whose wording isn't landing.
+
+Nothing is changed automatically: each proposal names its channel (the config
+file above, or a plugin PR) and is applied only with your per-item approval.
+
 ## Customize (fork)
 
 For a wholly new rule shape the config file's schema can't express, fork
@@ -202,5 +222,10 @@ bash-guardrails/
         │   ├── hooks.json         # wires the PreToolUse hook
         │   ├── guardrails.js      # the rules (readable, edit me)
         │   └── config.js          # loads/merges the optional config file
+        ├── skills/
+        │   └── tune-rules/
+        │       ├── SKILL.md       # /bash-guardrails:tune-rules
+        │       └── scripts/
+        │           └── analyze.js # transcript miner + hook replay (read-only)
         └── README.md
 ```

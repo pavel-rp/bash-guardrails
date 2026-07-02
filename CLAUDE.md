@@ -194,6 +194,29 @@ neither rule set can parse, silently routing around every check. This isn't
 a present gap (none of those tokens are allow-listed today) — it's a standing
 invariant to protect against a future mistake.
 
+## The tune-rules skill: wiring and hard rules
+
+`plugins/bash-guardrails/skills/tune-rules/` is **auto-discovered** — do NOT
+add a `skills` field to `plugin.json` for it (the standard `skills/` path is
+always scanned; the field is only for *additional* directories). The skill's
+command name comes from the DIRECTORY name (`/bash-guardrails:tune-rules`),
+not the frontmatter `name:`. Inside SKILL.md, bundled scripts are referenced
+via `${CLAUDE_SKILL_DIR}` (the skill's own dir) — `${CLAUDE_PLUGIN_ROOT}` is
+a hooks/commands variable, don't use it in skill content.
+
+`scripts/analyze.js` rules that must survive any edit:
+- **Read-only on `~/.claude`** — it mines real transcripts; it must never
+  write, move, or delete there. Its only output is stdout.
+- **Replays via spawnSync `input`**, same bootstrap-paradox reason as
+  `test/run.js` — never generate a shell pipe into the hook.
+- It finds the hook at `../../../hooks/guardrails.js` relative to itself; a
+  `skill` wire test in `test/run.js` replicates that walk and fails loudly if
+  the skill dir is ever re-nested.
+- It **collects, never judges**: safety judgment (what to propose, the
+  nested-shell prohibition, per-item approval) lives in SKILL.md so it's
+  visible to the model applying it — don't move that logic into the script
+  where it becomes an invisible filter on the data.
+
 ## Name must agree in three places
 
 The plugin name is referenced in `.claude-plugin/marketplace.json`,

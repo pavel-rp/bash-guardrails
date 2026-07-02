@@ -430,5 +430,37 @@ function spawnWithConfig({ userCfg, projectCfg, command, tool }) {
     }) !== 'deny');
 }
 
+// ===========================================================================
+// Skill wiring (tune-rules): skills/<name>/SKILL.md is auto-discovered by
+// Claude Code from the plugin root — no manifest field needed (unlike hooks,
+// there is no duplicate-load hazard). These checks catch a moved/renamed
+// skill dir, broken frontmatter, or a bundled script that no longer parses
+// or can no longer find the hook it replays through.
+// ===========================================================================
+{
+  const SKILL_DIR = path.join(HOOKS_DIR, '..', 'skills', 'tune-rules');
+  const SKILL_MD = path.join(SKILL_DIR, 'SKILL.md');
+  const ANALYZE = path.join(SKILL_DIR, 'scripts', 'analyze.js');
+
+  let md = '';
+  try { md = fs.readFileSync(SKILL_MD, 'utf8'); } catch { /* checks below fail */ }
+  check('skill', 'skills/tune-rules/SKILL.md exists', md.length > 0);
+
+  const fm = md.match(/^---\n([\s\S]*?)\n---/);
+  const nameMatch = fm && fm[1].match(/^name:\s*(\S+)/m);
+  check('skill', 'frontmatter name matches directory name', !!nameMatch && nameMatch[1] === 'tune-rules');
+  const descMatch = fm && fm[1].match(/^description:\s*(.+)$/m);
+  check('skill', 'frontmatter description present and <= 1536 chars',
+    !!descMatch && descMatch[1].trim().length > 0 && descMatch[1].length <= 1536);
+
+  check('skill', 'bundled analyze.js parses (node --check)',
+    spawnSync(process.execPath, ['--check', ANALYZE], { encoding: 'utf8' }).status === 0);
+
+  // analyze.js resolves the hook as scripts/ -> ../../.. -> hooks/guardrails.js;
+  // replicate that walk so a future re-nesting of the skill dir fails loudly here.
+  check('skill', 'analyze.js relative hook path resolves',
+    fs.existsSync(path.join(SKILL_DIR, 'scripts', '..', '..', '..', 'hooks', 'guardrails.js')));
+}
+
 console.log(`\n${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);
