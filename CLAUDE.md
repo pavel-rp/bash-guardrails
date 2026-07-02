@@ -67,10 +67,26 @@ not hot-swapped. Re-running a test mid-session will exercise the OLD hook.
 - **`git push` denials cover remote-destructive forms too**, not just force/main:
   `--delete`/`-d`, `origin :branch` (the `\s:` requires a *space* before the
   colon, so legit `local:remote` refspecs still allow), and `--mirror`.
-- **Some false positives are intentional.** `node -e "a > b"` is blocked because
-  `>` reads as a redirection. The cost is a harmless rewrite, never a wrong
-  execution. Don't loosen a regex to kill a false positive without weighing the
-  hole it opens.
+- **BLOCK/ALLOW run on a quote-MASKED string; DENY runs on the RAW string.**
+  `maskQuotes` blanks quoted contents (keeping bash's still-active `` ` `` and
+  `$…` inside double quotes) so commit messages and grep patterns can't trip
+  the guidance rules or the chain detector. Don't "simplify" by testing
+  everything on one string: masking DENY would let quoted-context tricks past
+  the destructive scan, and raw-testing BLOCK re-opens the
+  `git commit -m "a | b"` false-positive class. A rule can opt back into the
+  raw string with `raw: true` (the `=>({` rule needs it — its pattern lives
+  inside `node -e "…"` quotes). On unbalanced quotes `maskQuotes` returns the
+  string unmasked — conservative, same as pre-masking behavior.
+- **Remaining false positives are intentional.** The DENY scan is quote-blind
+  (a commit message quoting `rm -rf` is denied), and a backtick in a
+  DOUBLE-quoted message is blocked because bash really substitutes there — the
+  guidance says to use single quotes. The cost is a harmless rewrite, never a
+  wrong execution. Don't loosen a regex to kill a false positive without
+  weighing the hole it opens.
+- **Package runners (`npx`, `bunx`, `pnpm/yarn dlx`, `npm exec`) are ask-tier
+  by leading-token check, not regex.** A whole-string regex would demote every
+  commit message mentioning "npx". Keep the check on `leadingCommand` /
+  anchored subcommand.
 - **Empty `{}` output means "no opinion"** → Claude Code shows its normal prompt.
   That's the correct default for anything not explicitly denied/blocked/allowed.
 

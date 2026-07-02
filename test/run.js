@@ -28,6 +28,23 @@ const CASES = [
   ['heredoc write',         'cat > .tmp/m.txt <<EOF\nhi\nEOF', 'deny'],
   ['ls glob',               'ls src/*.ts', 'deny'],
   ['backtick',              'echo `whoami`', 'deny'],
+  ['cat in command position', 'cat package.json', 'deny'],
+  // Backticks in a DOUBLE-quoted message still substitute in bash — the block
+  // is correct there; the single-quoted spelling is the safe rewrite.
+  ['backtick in dquoted msg', 'git commit -m "docs: update `README`"', 'deny'],
+
+  // ALLOW -> quote-masking kills the false positives (v0.2.0)
+  ['filename contains cat',  'git add cat.png', 'allow'],
+  ['filename contains head', 'git mv head.svg logo.svg', 'allow'],
+  ['quoted grep pattern',    'grep -n "tail" src/app.js', 'allow'],
+  ['pipe inside commit msg', 'git commit -m "feat: a | b pipeline"', 'allow'],
+  ['semicolon in commit msg','git commit -m "fix: a; then b"', 'allow'],
+  ['redirect in commit msg', 'git commit -m "map x > y"', 'allow'],
+  ['backtick in squoted msg', "git commit -m 'docs: update `README`'", 'allow'],
+  ['backtick escaped in dquoted msg', 'gh api repos/x/issues/4/comments -f body="Addressed in \\`a4c7439\\`, thanks!"', 'allow'],
+  ['jq object-key head shape', "gh pr view 4 --json headRefOid --jq '{head: .headRefOid}'", 'allow'],
+  ['jq pipe filter',          "gh api repos/x/pulls/4/comments --jq '.[] | .body'", 'allow'],
+  ['pipe in quoted matcher doc', 'git commit -m "docs: matcher Bash\\|PowerShell covers both"', 'allow'],
 
   // DENY -> destructive
   ['rm -rf',                'rm -rf dist', 'deny'],
@@ -41,12 +58,25 @@ const CASES = [
   ['push --delete',         'git push origin --delete feature', 'deny'],
   ['push :branch',          'git push origin :old-branch', 'deny'],
   ['push --mirror',         'git push --mirror backup', 'deny'],
+  ['push +refspec main',    'git push origin +main', 'deny'],
+  ['push +refspec feature', 'git push origin +feature', 'deny'],
+  ['stash drop',            'git stash drop', 'deny'],
+  ['stash clear',           'git stash clear', 'deny'],
+  ['restore dot',           'git restore .', 'deny'],
+  ['restore --worktree',    'git restore --worktree src/', 'deny'],
+  ['checkout dot',          'git checkout .', 'deny'],
+  ['branch --delete --force','git branch --delete --force old', 'deny'],
+  ['branch -fd',            'git branch -fd old', 'deny'],
+  ['branch -df',            'git branch -df old', 'deny'],
 
   // ASK -> dangerous form of an allowed tool (demoted from auto-allow)
   ['node -e rmSync',        'node -e "require(\'fs\').rmSync(process.env.HOME,{recursive:true})"', 'ask'],
   ['python -c rmtree',      'python3 -c "import shutil,os; shutil.rmtree(os.path.expanduser(\'~\'))"', 'ask'],
   ['find -exec mv',         'find . -name "*.tmp" -exec mv {} /tmp \\;', 'ask'],
   ['chmod -R',              'chmod -R 777 .', 'ask'],
+  ['npx runner',            'npx rimraf dist', 'ask'],
+  ['pnpm dlx runner',       'pnpm dlx rimraf dist', 'ask'],
+  ['npm exec runner',       'npm exec vitest', 'ask'],
 
   // ALLOW -> safe single commands
   ['pnpm test',             'pnpm test', 'allow'],
@@ -58,6 +88,9 @@ const CASES = [
   ['find by name',          'find src -name "*.ts"', 'allow'],
   ['push refspec',          'git push origin local:remote', 'allow'],
   ['bare jq',               'jq .headRefOid pr.json', 'allow'],
+  ['restore --staged ok',   'git restore --staged .', 'allow'],
+  ['checkout branch ok',    'git checkout feat/x', 'allow'],
+  ['branch -d safe',        'git branch -d merged-branch', 'allow'],
 
   // BLOCK -> chain of allow-listed commands, split into separate calls
   ['chain of allowed',      'pnpm build && pnpm test', 'deny'],
@@ -86,6 +119,15 @@ const CASES = [
   ['ps Set-Content',          'Set-Content -Path a.txt -Value hi', 'deny', 'PowerShell'],
   ['ps Out-File',             'Get-Process | Out-File procs.txt', 'deny', 'PowerShell'],
   ['ps redirect',             'Get-Date > now.txt', 'deny', 'PowerShell'],
+  ['ps New-Item -Value',      'New-Item -ItemType File a.ts -Value "x"', 'deny', 'PowerShell'],
+
+  // ALLOW -> quote-masking (PS strings are not statement separators)
+  ['ps semicolon in msg',     'git commit -m "fix: a; then b"', 'allow', 'PowerShell'],
+
+  // DENY -> a backtick-escaped quote OUTSIDE any string must not be read as a
+  // real string-open, or the masker pairs it with a LATER unrelated quote and
+  // blanks everything between — hiding a real `;` and the command after it.
+  ['ps backtick-escaped quote hides chain', 'Get-ChildItem abc`"; npx rimraf C:\\important"', 'deny', 'PowerShell'],
 
   // ASK -> dangerous/arbitrary-code form (demoted from auto-allow)
   ['ps iex',                  'Invoke-Expression $payload', 'ask', 'PowerShell'],
@@ -94,6 +136,8 @@ const CASES = [
   ['ps New-Item -Force',      'New-Item -Force -ItemType File a.txt', 'ask', 'PowerShell'],
   ['ps node -e (pwsh)',       'node -e "1+1"', 'ask', 'PowerShell'],
   ['ps pipe to Remove-Item',  'Get-ChildItem | Remove-Item', 'ask', 'PowerShell'],
+  ['ps pipe into node',       'echo hi | node hook.js', 'ask', 'PowerShell'],
+  ['ps npx runner',           'npx rimraf dist', 'ask', 'PowerShell'],
 
   // ALLOW -> safe read-only / dev commands (pipelines are fine)
   ['ps gci',                  'Get-ChildItem -Recurse', 'allow', 'PowerShell'],
