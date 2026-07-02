@@ -65,6 +65,9 @@ function loadConfigFile(filePath) {
  * bad regex or wrong shape drops just this entry, not the whole file. An id
  * colliding with a built-in rule id is rejected too — it would make
  * `ruleOverrides`/`disabledRules` ambiguous about which rule they target.
+ * `g`/`y` flags are rejected: they make `RegExp.prototype.test()` STATEFUL
+ * (via `lastIndex`), so the same compiled rule could silently skip a match
+ * it already found once. These rules only ever need a plain match test.
  */
 function compileExtraRule(entry, tier, builtinIds) {
   try {
@@ -73,6 +76,7 @@ function compileExtraRule(entry, tier, builtinIds) {
         || typeof entry.reason !== 'string' || !entry.reason) return null;
     if (builtinIds.has(entry.id)) return null;
     const flags = typeof entry.flags === 'string' ? entry.flags : 'i';
+    if (/[gy]/.test(flags)) return null;
     return { id: entry.id, tier, pattern: new RegExp(entry.pattern, flags), reason: entry.reason };
   } catch {
     return null;
@@ -159,6 +163,8 @@ function loadConfig({ userConfigPath, projectConfigPath, builtinIds = new Set() 
   }
 }
 
+const VALID_OVERRIDES = new Set(['deny', 'ask', 'off']);
+
 /**
  * Resolve the EFFECTIVE tier for one rule under one shell-scoped config:
  *   'deny' — hard-block (native behavior for a `deny`-tier rule; a promotion
@@ -173,9 +179,18 @@ function loadConfig({ userConfigPath, projectConfigPath, builtinIds = new Set() 
  * the SAME clamp: a `deny`-tier id can NEVER resolve to 'off' — it clamps to
  * 'ask'. This is the one invariant a config file can't override: it can
  * loosen a hard deny down to a prompt, never remove it outright.
+ *
+ * An unrecognized `ruleOverrides` value (e.g. a typo like `"allow"`, or a
+ * non-string) is treated as NO override, not passed through — callers
+ * (`applyDenyRule`/`applyBlockRule`) only branch on the exact strings
+ * 'deny'/'ask', so any other value would fall through their `return null`
+ * and silently behave like 'off' on a rule the clamp is specifically meant
+ * to protect. Per-entry validation (same philosophy as compileExtraRule):
+ * one bad value doesn't take down the whole config, it's just ignored.
  */
 function effectiveTier(rule, shellConfig) {
   let override = shellConfig.ruleOverrides[rule.id];
+  if (!VALID_OVERRIDES.has(override)) override = undefined;
   if (override === undefined && shellConfig.disabledRules.has(rule.id)) override = 'off';
   if (override === undefined) {
     // No config override: `tier` is a CATEGORY, not the emitted outcome —

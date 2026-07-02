@@ -278,6 +278,10 @@ try {
     CONFIG.compileExtraRule({ id: 'rm-recursive', pattern: 'foo', reason: 'r' }, 'deny', builtinIds) === null);
   const compiled = CONFIG.compileExtraRule({ id: 'x', pattern: 'FOO', reason: 'r' }, 'deny', builtinIds);
   check('cfg', 'compileExtraRule: flags default to "i"', !!compiled && compiled.pattern.test('foo'));
+  check('cfg', 'compileExtraRule: global flag "g" rejected (stateful test() via lastIndex)',
+    CONFIG.compileExtraRule({ id: 'x', pattern: 'foo', reason: 'r', flags: 'g' }, 'deny', builtinIds) === null);
+  check('cfg', 'compileExtraRule: sticky flag "y" rejected',
+    CONFIG.compileExtraRule({ id: 'x', pattern: 'foo', reason: 'r', flags: 'y' }, 'deny', builtinIds) === null);
 }
 
 {
@@ -342,6 +346,15 @@ try {
   check('cfg', 'never-auto-allow + override deny -> deny (promoted)', CONFIG.effectiveTier(naaRule, shellCfg({ n: 'deny' })) === 'deny');
   check('cfg', 'never-auto-allow + override off -> off (loosened)', CONFIG.effectiveTier(naaRule, shellCfg({ n: 'off' })) === 'off');
   check('cfg', 'never-auto-allow + disabledRules -> off (loosened)', CONFIG.effectiveTier(naaRule, shellCfg({}, ['n'])) === 'off');
+
+  // An unrecognized override value must NOT fail open — applyDenyRule/
+  // applyBlockRule only branch on the exact strings 'deny'/'ask', so
+  // anything else falling through unvalidated would behave like 'off' on a
+  // rule the clamp exists specifically to protect.
+  check('cfg', 'deny + unrecognized override value ("allow") -> ignored, stays deny',
+    CONFIG.effectiveTier(denyRule, shellCfg({ d: 'allow' })) === 'deny');
+  check('cfg', 'deny + non-string override value (true) -> ignored, stays deny',
+    CONFIG.effectiveTier(denyRule, shellCfg({ d: true })) === 'deny');
 }
 
 // End-to-end: spawn the REAL hook with fixture config files via HOME/
@@ -400,6 +413,17 @@ function spawnWithConfig({ userCfg, projectCfg, command, tool }) {
 
   check('cfg', 'e2e: no config file -> built-in default behavior unchanged',
     spawnWithConfig({ command: 'rm -rf dist' }) === 'deny');
+
+  // Regression for the Copilot-caught fail-open: a garbage ruleOverrides
+  // value on a deny-tier id must never silently allow the command.
+  check('cfg', 'e2e: unrecognized ruleOverrides value on a deny-tier id does NOT silently allow',
+    spawnWithConfig({ projectCfg: { version: 1, ruleOverrides: { 'rm-recursive': 'allow' } }, command: 'rm -rf dist' }) === 'deny');
+
+  check('cfg', 'e2e: extraDenyRules entry with a global flag is dropped (rule never registers)',
+    spawnWithConfig({
+      projectCfg: { version: 1, extraDenyRules: [{ id: 'org-custom', pattern: '\\bfoo\\b', reason: 'r', flags: 'g' }] },
+      command: 'foo bar',
+    }) !== 'deny');
 }
 
 console.log(`\n${total - failed}/${total} passed`);

@@ -39,7 +39,7 @@
  * Hook protocol: read the PreToolUse event JSON on stdin, write a decision JSON
  * on stdout.  Docs: https://code.claude.com/docs/en/hooks-guide
  *
- * Optional config file (see config.js + README "Customize"): a two-tier
+ * Optional config file (see config.js + README "Configure without forking"): a two-tier
  * ~/.claude/bash-guardrails.json <- <project>/.claude/bash-guardrails.json
  * can loosen a rule to "ask", disable a block/never-auto-allow rule, add
  * extra allow-commands, or add extra deny/block patterns — all shell-scoped
