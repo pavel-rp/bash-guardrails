@@ -45,6 +45,15 @@ not hot-swapped. Re-running a test mid-session will exercise the OLD hook.
 
 ## Invariants — don't break these when editing `guardrails.js`
 
+- **Every entry in `DENY_RULES`/`GIT_DENY_RULES`/`BLOCK_RULES`/`NEVER_AUTO_ALLOW`/
+  `GIT_NEVER_AUTO_ALLOW` and the PS mirrors (`PS_DENY_RULES`/`PS_GUIDANCE_RULES`/
+  `PS_NEVER_AUTO`) needs a kebab-case `id` and a `tier`** (`deny`/`block`/
+  `never-auto-allow`, matching the array's own tier). This is the prerequisite
+  for config-file rule references (Phase 3) and for `test/run.js`'s "rule ids
+  are unique" wire check — a new rule without an id fails that check. Pick an
+  id that describes the pattern, not the flag spelling (`git-switch-force`,
+  not `git-switch-dash-f`), since a rule may later grow to match more
+  spellings of the same operation.
 - **`DENY_RULES` scan the whole command string** (not just the first token).
   This is deliberate: it's what stops chaining from smuggling a destructive op
   past the gate, e.g. `pnpm build && rm -rf dist`. Keep deny patterns global.

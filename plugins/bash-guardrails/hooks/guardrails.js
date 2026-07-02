@@ -45,35 +45,35 @@
 // are shared by the Bash and PowerShell deny sets below.
 // ---------------------------------------------------------------------------
 const GIT_DENY_RULES = [
-  { pattern: /\bgit\s+push\b[^\n]*(--force\b|--force-with-lease\b|\s-f\b)/i, reason: 'force-push is blocked.' },
-  { pattern: /\bgit\s+push\s+\S+\s+(main|master)\b/i, reason: 'pushing directly to main/master is blocked. Push a feature branch and open a PR.' },
+  { id: 'git-push-force', tier: 'deny', pattern: /\bgit\s+push\b[^\n]*(--force\b|--force-with-lease\b|\s-f\b)/i, reason: 'force-push is blocked.' },
+  { id: 'git-push-main-master', tier: 'deny', pattern: /\bgit\s+push\s+\S+\s+(main|master)\b/i, reason: 'pushing directly to main/master is blocked. Push a feature branch and open a PR.' },
   // Remote-destructive pushes: branch deletion (`--delete`/`-d`/`origin :ref`)
   // and `--mirror` (which can delete remote refs to match local).
-  { pattern: /\bgit\s+push\b[^\n]*\s(?:--delete\b|-d\b)/i, reason: 'deleting a remote branch (git push --delete) is blocked.' },
-  { pattern: /\bgit\s+push\b[^\n]*\s:[^\s/]/i,         reason: 'deleting a remote branch (git push origin :branch) is blocked.' },
-  { pattern: /\bgit\s+push\b[^\n]*--mirror\b/i,        reason: 'git push --mirror can delete remote refs and is blocked.' },
+  { id: 'git-push-delete-branch', tier: 'deny', pattern: /\bgit\s+push\b[^\n]*\s(?:--delete\b|-d\b)/i, reason: 'deleting a remote branch (git push --delete) is blocked.' },
+  { id: 'git-push-delete-colon-branch', tier: 'deny', pattern: /\bgit\s+push\b[^\n]*\s:[^\s/]/i,         reason: 'deleting a remote branch (git push origin :branch) is blocked.' },
+  { id: 'git-push-mirror', tier: 'deny', pattern: /\bgit\s+push\b[^\n]*--mirror\b/i,        reason: 'git push --mirror can delete remote refs and is blocked.' },
   // A leading `+` on a refspec forces exactly like --force and must not dodge
   // the force rule above. `\s\+` requires the plus to START a token, so branch
   // names merely containing `+` (c++-fix) still pass.
-  { pattern: /\bgit\s+push\b[^\n]*\s\+\S/,            reason: 'force-push via +refspec (git push origin +branch) is blocked.' },
-  { pattern: /\bgit\s+reset\s+--hard\b/i,             reason: 'git reset --hard discards work and is blocked.' },
-  { pattern: /\bgit\s+clean\s+(-\S+\s+)*-\S*f/i,      reason: 'git clean -f deletes untracked files and is blocked.' },
-  { pattern: /\bgit\s+stash\s+(?:drop|clear)\b/i,     reason: 'git stash drop/clear permanently discards stashed work and is blocked.' },
+  { id: 'git-push-force-refspec', tier: 'deny', pattern: /\bgit\s+push\b[^\n]*\s\+\S/,            reason: 'force-push via +refspec (git push origin +branch) is blocked.' },
+  { id: 'git-reset-hard', tier: 'deny', pattern: /\bgit\s+reset\s+--hard\b/i,             reason: 'git reset --hard discards work and is blocked.' },
+  { id: 'git-clean-force', tier: 'deny', pattern: /\bgit\s+clean\s+(-\S+\s+)*-\S*f/i,      reason: 'git clean -f deletes untracked files and is blocked.' },
+  { id: 'git-stash-drop-clear', tier: 'deny', pattern: /\bgit\s+stash\s+(?:drop|clear)\b/i,     reason: 'git stash drop/clear permanently discards stashed work and is blocked.' },
   // Worktree-discarding restore/checkout. The dot must directly follow the
   // subcommand (or `--`), so `git restore --staged .` — an unstage that keeps
   // the worktree — still auto-allows. Dot-leading checkout args are always
   // pathspecs (refs cannot start with a dot), i.e. a discard, never a switch.
-  { pattern: /\bgit\s+restore\s+(?:--\s+)?\./,        reason: 'git restore <path> discards local changes and is blocked.' },
-  { pattern: /\bgit\s+restore\b[^\n]*\s(?:--worktree|-W)\b/, reason: 'git restore --worktree discards local changes and is blocked.' },
-  { pattern: /\bgit\s+checkout\s+(?:--\s+)?\./,       reason: 'git checkout <path> discards local changes and is blocked.' },
+  { id: 'git-restore-path', tier: 'deny', pattern: /\bgit\s+restore\s+(?:--\s+)?\./,        reason: 'git restore <path> discards local changes and is blocked.' },
+  { id: 'git-restore-worktree', tier: 'deny', pattern: /\bgit\s+restore\b[^\n]*\s(?:--worktree|-W)\b/, reason: 'git restore --worktree discards local changes and is blocked.' },
+  { id: 'git-checkout-path', tier: 'deny', pattern: /\bgit\s+checkout\s+(?:--\s+)?\./,       reason: 'git checkout <path> discards local changes and is blocked.' },
   // git switch is git's newer checkout replacement; -f/--discard-changes is
   // the same working-tree-discard class as restore/checkout above.
-  { pattern: /\bgit\s+switch\b[^\n]*\s(?:--discard-changes\b|-f\b)/i, reason: 'git switch -f/--discard-changes discards local changes and is blocked.' },
-  { pattern: /\bgit\s+branch\s+-D\b/,                 reason: 'force-deleting a branch (git branch -D) is blocked.' },
+  { id: 'git-switch-force', tier: 'deny', pattern: /\bgit\s+switch\b[^\n]*\s(?:--discard-changes\b|-f\b)/i, reason: 'git switch -f/--discard-changes discards local changes and is blocked.' },
+  { id: 'git-branch-force-delete', tier: 'deny', pattern: /\bgit\s+branch\s+-D\b/,                 reason: 'force-deleting a branch (git branch -D) is blocked.' },
   // Same op spelled differently: --delete + --force in either order, or a
   // combined short flag carrying both letters (-fd, -df, -f -d). Two
   // lookaheads = "a delete-ish token AND a force-ish token both present".
-  { pattern: /\bgit\s+branch\b(?=[^\n]*(?:--delete\b|\s-[a-z]*d))(?=[^\n]*(?:--force\b|\s-[a-z]*f))/i, reason: 'force-deleting a branch (git branch --delete --force / -fd) is blocked.' },
+  { id: 'git-branch-force-delete-combined', tier: 'deny', pattern: /\bgit\s+branch\b(?=[^\n]*(?:--delete\b|\s-[a-z]*d))(?=[^\n]*(?:--force\b|\s-[a-z]*f))/i, reason: 'force-deleting a branch (git branch --delete --force / -fd) is blocked.' },
 ];
 
 // Git ref-surgery: not destructive enough to hard-deny (plumbing-level, rarely
@@ -81,11 +81,11 @@ const GIT_DENY_RULES = [
 // forecloses recovery or rewrites history, so silent auto-approval is wrong.
 // Demoted to ask, not DENY. Shared by both shells via NEVER_AUTO_ALLOW below.
 const GIT_NEVER_AUTO_ALLOW = [
-  /\bgit\s+update-ref\s+-d\b/i,
-  /\bgit\s+reflog\s+(?:expire|delete)\b/i,
-  /\bgit\s+gc\b[^\n]*(?:--prune=now\b|--aggressive\b)/i,
-  /\bgit\s+filter-(?:branch|repo)\b/i,
-  /\bgit\s+worktree\s+remove\b[^\n]*(?:--force\b|\s-[a-z]*f\b)/i,
+  { id: 'git-update-ref-delete', tier: 'never-auto-allow', pattern: /\bgit\s+update-ref\s+-d\b/i },
+  { id: 'git-reflog-expire-delete', tier: 'never-auto-allow', pattern: /\bgit\s+reflog\s+(?:expire|delete)\b/i },
+  { id: 'git-gc-prune-aggressive', tier: 'never-auto-allow', pattern: /\bgit\s+gc\b[^\n]*(?:--prune=now\b|--aggressive\b)/i },
+  { id: 'git-filter-branch-repo', tier: 'never-auto-allow', pattern: /\bgit\s+filter-(?:branch|repo)\b/i },
+  { id: 'git-worktree-remove-force', tier: 'never-auto-allow', pattern: /\bgit\s+worktree\s+remove\b[^\n]*(?:--force\b|\s-[a-z]*f\b)/i },
 ];
 
 // ---------------------------------------------------------------------------
@@ -96,15 +96,15 @@ const GIT_NEVER_AUTO_ALLOW = [
 const DENY_RULES = [
   // rm is matched with an optional path prefix so `/bin/rm -rf` and `$(which
   // rm) -rf` can't slip past by not starting at a word separator.
-  { pattern: /(^|[\s;&|(=])(?:\S*\/)?rm\s+-[a-z]*r/i,  reason: 'recursive rm (rm -r / -rf) is blocked.' },
-  { pattern: /(^|[\s;&|(=])(?:\S*\/)?rm\s+[^\n]*--recursive/i, reason: 'recursive rm (--recursive) is blocked.' },
+  { id: 'rm-recursive', tier: 'deny', pattern: /(^|[\s;&|(=])(?:\S*\/)?rm\s+-[a-z]*r/i,  reason: 'recursive rm (rm -r / -rf) is blocked.' },
+  { id: 'rm-recursive-long', tier: 'deny', pattern: /(^|[\s;&|(=])(?:\S*\/)?rm\s+[^\n]*--recursive/i, reason: 'recursive rm (--recursive) is blocked.' },
   // find can delete a whole tree as effectively as rm -rf; these forms are
   // irreversible and have no safe-by-default reading, so they're hard-denied.
-  { pattern: /\bfind\b[^\n]*\s-delete\b/i,            reason: 'find -delete recursively deletes and is blocked. Use the Glob/Read tools to inspect, then delete deliberately.' },
-  { pattern: /\bfind\b[^\n]*-exec(?:dir)?\s+(?:\S*\/)?rm\b/i, reason: 'find -exec rm is blocked.' },
-  { pattern: /\bdd\s+if=/i,                           reason: 'raw dd writes are blocked.' },
-  { pattern: /\bmkfs\b/i,                             reason: 'mkfs (format) is blocked.' },
-  { pattern: /:\s*\(\s*\)\s*\{[^}]*\}\s*;/,           reason: 'fork bomb pattern is blocked.' },
+  { id: 'find-delete', tier: 'deny', pattern: /\bfind\b[^\n]*\s-delete\b/i,            reason: 'find -delete recursively deletes and is blocked. Use the Glob/Read tools to inspect, then delete deliberately.' },
+  { id: 'find-exec-rm', tier: 'deny', pattern: /\bfind\b[^\n]*-exec(?:dir)?\s+(?:\S*\/)?rm\b/i, reason: 'find -exec rm is blocked.' },
+  { id: 'dd-write', tier: 'deny', pattern: /\bdd\s+if=/i,                           reason: 'raw dd writes are blocked.' },
+  { id: 'mkfs-format', tier: 'deny', pattern: /\bmkfs\b/i,                             reason: 'mkfs (format) is blocked.' },
+  { id: 'fork-bomb', tier: 'deny', pattern: /:\s*\(\s*\)\s*\{[^}]*\}\s*;/,           reason: 'fork bomb pattern is blocked.' },
   ...GIT_DENY_RULES,
 ];
 
@@ -115,10 +115,12 @@ const DENY_RULES = [
 // ---------------------------------------------------------------------------
 const BLOCK_RULES = [
   {
+    id: 'chain-splittable', tier: 'block',
     test: (cmd) => isSplittableChain(cmd, (t) => ALLOW_COMMANDS.has(t)),
     reason: 'Do not chain commands with `;`/`&&`. Run each as a SEPARATE Bash call — every known-safe command auto-approves on its own, so splitting removes the permission prompt entirely. Independent calls can be sent in one message to run in parallel.',
   },
   {
+    id: 'exit-code-echo-probe', tier: 'block',
     // `cmd; echo "...$?"` — Claude appends an exit-code probe to be sure of
     // pass/fail. The Bash tool already returns the exit status, so it's pure
     // noise AND it turns an otherwise-single command into a chain that can't
@@ -128,14 +130,17 @@ const BLOCK_RULES = [
     reason: 'Do not append `; echo "...$?"` to read the exit code — the Bash tool already reports it. Run the command on its own.',
   },
   {
+    id: 'cd-block', tier: 'block',
     test: (cmd) => /(^|;|&&|\|\|)\s*cd\s+/.test(cmd),
     reason: 'Do not use `cd` — the working directory persists between Bash calls. Use a relative or absolute path instead.',
   },
   {
+    id: 'heredoc-block', tier: 'block',
     test: (cmd) => /<</.test(cmd),
     reason: 'Do not use heredocs (`<<`). They trip the obfuscation detector and silently mangle content (e.g. backticks). To write a file, use the Write tool.',
   },
   {
+    id: 'cat-head-tail-guard', tier: 'block',
     // Command position only: leading the string or right after |, ;, &, `(`,
     // a backtick, or `$(` — and followed by whitespace/end. `git add cat.png`
     // and `git mv head.svg logo.svg` are arguments, not invocations.
@@ -143,6 +148,7 @@ const BLOCK_RULES = [
     reason: 'Do not use cat/head/tail to read files. Use the Read tool — it is faster and does not trip the shell-safety detector.',
   },
   {
+    id: 'arrow-fn-paren', tier: 'block',
     // Runs on the RAW string (see `raw` flag): the pattern lives inside
     // `node -e "…"` quotes, which masking strips.
     raw: true,
@@ -150,22 +156,27 @@ const BLOCK_RULES = [
     reason: 'Arrow functions written as `=>({...})` look like process substitution to the safety detector. Use `=>{ return {...} }` instead.',
   },
   {
+    id: 'backtick-block', tier: 'block',
     test: (cmd) => /`/.test(cmd),
     reason: 'Backticks ARE command substitution in bash — even inside double quotes. For literal backticks (e.g. in a commit message), use single quotes around the text; for file content, use the Write tool.',
   },
   {
+    id: 'var-redirect-block', tier: 'block',
     test: (cmd) => /\$\w+.*[<>]|[<>].*\$\w+/.test(cmd),
     reason: 'Do not combine shell variables with redirections. Split this into separate Bash calls.',
   },
   {
+    id: 'pipe-block', tier: 'block',
     test: (cmd) => /\|/.test(cmd),
     reason: 'No pipes (`|`). Run each command as a separate Bash call. To process output, capture it from the first call and act on it in the next.',
   },
   {
+    id: 'redirect-block', tier: 'block',
     test: (cmd) => /[0-9]*>[^&]/.test(cmd),
     reason: 'No output redirections (`>`). Let stdout return the result. To write a file, use the Write tool. (`2>&1` is fine.)',
   },
   {
+    id: 'ls-glob-block', tier: 'block',
     test: (cmd) => /^\s*ls\b/.test(cmd) && /\*/.test(cmd),
     reason: 'Do not use `ls` with glob patterns to find files. Use the Glob tool instead.',
   },
@@ -220,16 +231,16 @@ const NEVER_AUTO_ALLOW = [
   // perl/ruby are unreachable dead code today — neither is in ALLOW_COMMANDS,
   // so leadingCommand(command) can never be 'perl'/'ruby' in the first place —
   // kept as defense-in-depth in case either is ever allow-listed.
-  /\b(?:node|bun|python|python3|perl|ruby)\b[^\n]*\s-(?:e|c)\b/i,
-  /\b(?:node)\b[^\n]*\s--eval\b/i,
-  /\bdeno\s+eval\b/i,
+  { id: 'inline-eval-interpreter', tier: 'never-auto-allow', pattern: /\b(?:node|bun|python|python3|perl|ruby)\b[^\n]*\s-(?:e|c)\b/i },
+  { id: 'node-eval-flag', tier: 'never-auto-allow', pattern: /\b(?:node)\b[^\n]*\s--eval\b/i },
+  { id: 'deno-eval', tier: 'never-auto-allow', pattern: /\bdeno\s+eval\b/i },
   // find running an arbitrary command per match (-exec rm is already denied)
-  /\bfind\b[^\n]*-exec(?:dir)?\b/i,
+  { id: 'find-exec-arbitrary', tier: 'never-auto-allow', pattern: /\bfind\b[^\n]*-exec(?:dir)?\b/i },
   // recursive permission/ownership changes
-  /\bch(?:mod|own)\b[^\n]*\s-[a-z]*R\b/i,
+  { id: 'chmod-chown-recursive', tier: 'never-auto-allow', pattern: /\bch(?:mod|own)\b[^\n]*\s-[a-z]*R\b/i },
   // mv silently overwrites an existing destination with -f; only the bare
   // (non-force) form is safe to auto-run. Paired with `mv` on ALLOW_COMMANDS.
-  /\bmv\b[^\n]*\s(?:--force\b|-[a-z]*f\b)/i,
+  { id: 'mv-force', tier: 'never-auto-allow', pattern: /\bmv\b[^\n]*\s(?:--force\b|-[a-z]*f\b)/i },
   ...GIT_NEVER_AUTO_ALLOW,
 ];
 
@@ -341,7 +352,7 @@ function isSplittableChain(command, tokenAllowed) {
 
 function isAutoApprovable(command, masked) {
   if (HAS_CHAIN.test(masked)) return false;   // masked: a `;` inside a commit message is not a chain
-  if (NEVER_AUTO_ALLOW.some((re) => re.test(command))) return false; // raw: a false hit here only costs a prompt
+  if (NEVER_AUTO_ALLOW.some((rule) => rule.pattern.test(command))) return false; // raw: a false hit here only costs a prompt
   const token = leadingCommand(command);
   if (EXEC_RUNNER_TOKENS.has(token)) return false;
   if (PKG_EXEC_SUBCOMMAND.test(command)) return false;
@@ -364,41 +375,46 @@ const PS_DENY_RULES = [
   // Recursive Remove-Item (any alias). `-r` is an unambiguous abbreviation of
   // -Recurse for Remove-Item. `[^;|\n]*` keeps the flag in the same pipeline
   // segment so `rm a.txt; gci -Recurse` isn't misread as a recursive delete.
-  { pattern: new RegExp(`(^|[\\s;|(=])(?:${PS_REMOVE})\\b[^;|\\n]*\\s-r(?:ec(?:urse)?)?\\b`, 'i'),
+  { id: 'ps-remove-recursive', tier: 'deny', pattern: new RegExp(`(^|[\\s;|(=])(?:${PS_REMOVE})\\b[^;|\\n]*\\s-r(?:ec(?:urse)?)?\\b`, 'i'),
     reason: 'recursive Remove-Item (-Recurse) is blocked.' },
   // Anything piped into a removal WITH -Recurse/-Force is a bulk delete.
-  { pattern: new RegExp(`\\|\\s*(?:${PS_REMOVE})\\b[^;\\n]*\\s-(?:Recurse|Force|r|f)\\b`, 'i'),
+  { id: 'ps-pipe-into-remove-bulk', tier: 'deny', pattern: new RegExp(`\\|\\s*(?:${PS_REMOVE})\\b[^;\\n]*\\s-(?:Recurse|Force|r|f)\\b`, 'i'),
     reason: 'piping into Remove-Item -Recurse/-Force is a bulk delete and is blocked.' },
-  { pattern: /(^|[\s;|(=])(?:Clear-Content|clc)\b/i, reason: 'Clear-Content wipes a file’s contents and is blocked. Use the Write tool to replace a file.' },
-  { pattern: /\b(?:Format-Volume|Clear-Disk|Remove-Partition|Initialize-Disk|Reset-PhysicalDisk)\b/i, reason: 'disk/partition operations are blocked.' },
-  { pattern: /(^|[\s;|(=])(?:Remove-Item|rm|ri)\b[^;\n]*\b(?:HKLM|HKCU|HKCR|HKU):/i, reason: 'registry key deletion is blocked.' },
-  { pattern: /(^|[\s;|(=])(?:del|rd|rmdir)\b[^;\n]*\/s\b/i, reason: 'recursive del/rd /s is blocked.' },
+  { id: 'ps-clear-content', tier: 'deny', pattern: /(^|[\s;|(=])(?:Clear-Content|clc)\b/i, reason: 'Clear-Content wipes a file’s contents and is blocked. Use the Write tool to replace a file.' },
+  { id: 'ps-disk-partition-ops', tier: 'deny', pattern: /\b(?:Format-Volume|Clear-Disk|Remove-Partition|Initialize-Disk|Reset-PhysicalDisk)\b/i, reason: 'disk/partition operations are blocked.' },
+  { id: 'ps-registry-delete', tier: 'deny', pattern: /(^|[\s;|(=])(?:Remove-Item|rm|ri)\b[^;\n]*\b(?:HKLM|HKCU|HKCR|HKU):/i, reason: 'registry key deletion is blocked.' },
+  { id: 'ps-del-rd-recursive', tier: 'deny', pattern: /(^|[\s;|(=])(?:del|rd|rmdir)\b[^;\n]*\/s\b/i, reason: 'recursive del/rd /s is blocked.' },
   // Shuts down or reboots the whole machine — kills the session itself. No
   // legitimate reason for a coding agent to do this; ask-tier is too weak.
-  { pattern: /(^|[\s;|(=])(?:Stop-Computer|Restart-Computer)\b/i, reason: 'shutting down or restarting the machine is blocked.' },
+  { id: 'ps-stop-restart-computer', tier: 'deny', pattern: /(^|[\s;|(=])(?:Stop-Computer|Restart-Computer)\b/i, reason: 'shutting down or restarting the machine is blocked.' },
   ...GIT_DENY_RULES,
 ];
 
 // File-writing → steer to the Write tool (mirrors the Bash redirect block).
 const PS_GUIDANCE_RULES = [
   {
+    id: 'ps-chain-splittable', tier: 'block',
     test: (cmd) => isSplittableChain(cmd, (t) => PS_ALLOW.has(t) || ALLOW_COMMANDS.has(t)),
     reason: 'Do not chain commands with `;`/`&&`. Run each as a SEPARATE PowerShell call — known-safe cmdlets auto-approve on their own, so splitting removes the permission prompt. Independent calls can be sent in one message to run in parallel.',
   },
   {
+    id: 'ps-out-file-set-content', tier: 'block',
     test: (cmd) => /(^|[\s;|(=])(?:Out-File|Set-Content|Add-Content|Tee-Object|tee)\b/i.test(cmd),
     reason: 'Do not write files with Out-File/Set-Content/Add-Content. Use the Write tool.',
   },
   {
+    id: 'ps-new-item-value', tier: 'block',
     // New-Item is allow-listed for mkdir, but `-Value` makes it a file write.
     test: (cmd) => /(^|[\s;|(=])(?:New-Item|ni)\b[^;\n]*\s-Value\b/i.test(cmd),
     reason: 'Do not write file contents with New-Item -Value. Use the Write tool.',
   },
   {
+    id: 'ps-redirect', tier: 'block',
     test: (cmd) => /[0-9]*>[^&]/.test(cmd),
     reason: 'No output redirections (`>`/`>>`) to files. Let stdout return the result, or use the Write tool. (`2>&1` is fine.)',
   },
   {
+    id: 'ps-cd-block', tier: 'block',
     test: (cmd) => /(^|;|&&|\|\|)\s*(?:cd|sl|Set-Location|Push-Location|pushd)\b/i.test(cmd),
     reason: 'Do not use `cd`/Set-Location — the working directory persists between PowerShell calls. Use a full path instead.',
   },
@@ -443,25 +459,25 @@ const PS_NETSH_WLAN_SHOW = /^\s*netsh(?:\.exe)?\s+wlan\s+show\b/i;
 const PS_NEVER_AUTO = [
   // Text piped into an external interpreter/shell. The object-pipeline
   // exemption is for typed cmdlet flow — feeding a script is not that.
-  /\|\s*(?:node|python|python3|perl|ruby|bun|deno|bash|sh|cmd|pwsh|powershell)(?:\.exe)?\b/i,
-  /\b(?:iex|Invoke-Expression|icm|Invoke-Command|Invoke-Item|Add-Type)\b/i,
-  /\b(?:saps|Start-Process)\b/i,
-  /\b(?:iwr|Invoke-WebRequest|irm|Invoke-RestMethod|Start-BitsTransfer|curl|wget)\b/i,
-  /\bForEach-Object\b/i,
-  /(^|[\s|;(=])%[\s({]/,                 // % { … } scriptblock (ForEach-Object alias)
-  /&\s+[$(]/,                            // call operator on a variable / expression
-  /(^|[\s;])\.\s+[$(]/,                  // dot-source a variable / expression
+  { id: 'ps-pipe-into-interpreter', tier: 'never-auto-allow', pattern: /\|\s*(?:node|python|python3|perl|ruby|bun|deno|bash|sh|cmd|pwsh|powershell)(?:\.exe)?\b/i },
+  { id: 'ps-invoke-expression', tier: 'never-auto-allow', pattern: /\b(?:iex|Invoke-Expression|icm|Invoke-Command|Invoke-Item|Add-Type)\b/i },
+  { id: 'ps-start-process', tier: 'never-auto-allow', pattern: /\b(?:saps|Start-Process)\b/i },
+  { id: 'ps-web-fetch', tier: 'never-auto-allow', pattern: /\b(?:iwr|Invoke-WebRequest|irm|Invoke-RestMethod|Start-BitsTransfer|curl|wget)\b/i },
+  { id: 'ps-foreach-object', tier: 'never-auto-allow', pattern: /\bForEach-Object\b/i },
+  { id: 'ps-scriptblock-percent', tier: 'never-auto-allow', pattern: /(^|[\s|;(=])%[\s({]/ },                 // % { … } scriptblock (ForEach-Object alias)
+  { id: 'ps-call-operator-variable', tier: 'never-auto-allow', pattern: /&\s+[$(]/ },                            // call operator on a variable / expression
+  { id: 'ps-dot-source-variable', tier: 'never-auto-allow', pattern: /(^|[\s;])\.\s+[$(]/ },                  // dot-source a variable / expression
   // Any mutating verb anywhere blocks auto-approve. Recursive/forced forms are
   // already hard-denied above; this catches the non-recursive ones so a delete
   // never runs silently (e.g. `gci | Remove-Item`).
-  /(^|[\s|;(=])(?:Remove-Item|rm|ri|rd|rmdir|del|erase|Clear-Item|Clear-Content|clc|Move-Item|mv|move|Rename-Item|ren|rni|Set-Item|Set-ItemProperty|Set-Content|Add-Content|Stop-Process|kill|spps|Stop-Service)\b/i,
-  /\bNew-Item\b[^;\n]*\s-Force\b/i,      // New-Item -Force can truncate an existing file
+  { id: 'ps-mutating-verb', tier: 'never-auto-allow', pattern: /(^|[\s|;(=])(?:Remove-Item|rm|ri|rd|rmdir|del|erase|Clear-Item|Clear-Content|clc|Move-Item|mv|move|Rename-Item|ren|rni|Set-Item|Set-ItemProperty|Set-Content|Add-Content|Stop-Process|kill|spps|Stop-Service)\b/i },
+  { id: 'ps-new-item-force', tier: 'never-auto-allow', pattern: /\bNew-Item\b[^;\n]*\s-Force\b/i },      // New-Item -Force can truncate an existing file
 ];
 
 function isAutoApprovablePS(command, masked) {
   if (HAS_CHAIN.test(masked)) return false;                          // masked: `;` inside a string is not a chain
-  if (NEVER_AUTO_ALLOW.some((re) => re.test(command))) return false; // shared: node -e, python -c, …
-  if (PS_NEVER_AUTO.some((re) => re.test(command))) return false;
+  if (NEVER_AUTO_ALLOW.some((rule) => rule.pattern.test(command))) return false; // shared: node -e, python -c, …
+  if (PS_NEVER_AUTO.some((rule) => rule.pattern.test(command))) return false;
   const token = leadingCommand(command);
   if (EXEC_RUNNER_TOKENS.has(token)) return false;
   if (PKG_EXEC_SUBCOMMAND.test(command)) return false;
@@ -536,18 +552,27 @@ function decide(rawInput) {
 }
 
 // ---------------------------------------------------------------------------
-// Entry point.
+// Entry point. Guarded by require.main so `require()`-ing this file (e.g. from
+// test/run.js, to introspect rule ids) doesn't attach a stdin listener —
+// spawning it directly as the hook (`node guardrails.js`) is unaffected.
 // ---------------------------------------------------------------------------
-let input = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', (chunk) => { input += chunk; });
-process.stdin.on('end', () => {
-  let decision;
-  try {
-    decision = decide(input);
-  } catch (err) {
-    // Never break the session because the hook threw — fall through to a prompt.
-    decision = passthrough();
-  }
-  process.stdout.write(JSON.stringify(decision));
-});
+if (require.main === module) {
+  let input = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => { input += chunk; });
+  process.stdin.on('end', () => {
+    let decision;
+    try {
+      decision = decide(input);
+    } catch (err) {
+      // Never break the session because the hook threw — fall through to a prompt.
+      decision = passthrough();
+    }
+    process.stdout.write(JSON.stringify(decision));
+  });
+}
+
+module.exports = {
+  GIT_DENY_RULES, GIT_NEVER_AUTO_ALLOW, DENY_RULES, BLOCK_RULES, NEVER_AUTO_ALLOW,
+  PS_DENY_RULES, PS_GUIDANCE_RULES, PS_NEVER_AUTO,
+};
