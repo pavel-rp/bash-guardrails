@@ -38,7 +38,16 @@
  *
  * Hook protocol: read the PreToolUse event JSON on stdin, write a decision JSON
  * on stdout.  Docs: https://code.claude.com/docs/en/hooks-guide
+ *
+ * Optional config file (see config.js + README "Configure without forking"): a two-tier
+ * ~/.claude/bash-guardrails.json <- <project>/.claude/bash-guardrails.json
+ * can loosen a rule to "ask", disable a block/never-auto-allow rule, add
+ * extra allow-commands, or add extra deny/block patterns — all shell-scoped
+ * (top-level = Bash, `powershell.*` = PowerShell). No config file present ->
+ * built-in defaults only, identical to pre-config behavior.
  */
+
+const config = require('./config.js');
 
 // ---------------------------------------------------------------------------
 // Destructive git operations. git behaves identically in any shell, so these
@@ -350,13 +359,14 @@ function isSplittableChain(command, tokenAllowed) {
   return segments.every((seg) => tokenAllowed(leadingCommand(seg)));
 }
 
-function isAutoApprovable(command, masked) {
+function isAutoApprovable(command, masked, cfg) {
   if (HAS_CHAIN.test(masked)) return false;   // masked: a `;` inside a commit message is not a chain
-  if (NEVER_AUTO_ALLOW.some((rule) => rule.pattern.test(command))) return false; // raw: a false hit here only costs a prompt
+  // raw: a false hit here only costs a prompt
+  if (NEVER_AUTO_ALLOW.some((rule) => rule.pattern.test(command) && config.effectiveTier(rule, cfg) !== 'off')) return false;
   const token = leadingCommand(command);
   if (EXEC_RUNNER_TOKENS.has(token)) return false;
   if (PKG_EXEC_SUBCOMMAND.test(command)) return false;
-  return ALLOW_COMMANDS.has(token);
+  return ALLOW_COMMANDS.has(token) || cfg.extraAllowCommands.has(token);
 }
 
 // ===========================================================================
@@ -474,15 +484,24 @@ const PS_NEVER_AUTO = [
   { id: 'ps-new-item-force', tier: 'never-auto-allow', pattern: /\bNew-Item\b[^;\n]*\s-Force\b/i },      // New-Item -Force can truncate an existing file
 ];
 
-function isAutoApprovablePS(command, masked) {
+// Every built-in rule id, across every array — used to reject a config
+// extraDenyRules/extraBlockRules entry that reuses one (see config.js).
+const BUILTIN_IDS = new Set(
+  [...DENY_RULES, ...BLOCK_RULES, ...NEVER_AUTO_ALLOW, ...PS_DENY_RULES, ...PS_GUIDANCE_RULES, ...PS_NEVER_AUTO]
+    .map((rule) => rule.id)
+);
+
+function isAutoApprovablePS(command, masked, psCfg) {
   if (HAS_CHAIN.test(masked)) return false;                          // masked: `;` inside a string is not a chain
-  if (NEVER_AUTO_ALLOW.some((rule) => rule.pattern.test(command))) return false; // shared: node -e, python -c, …
-  if (PS_NEVER_AUTO.some((rule) => rule.pattern.test(command))) return false;
+  // shared: node -e, python -c, … + PS-only never-auto rules. Both resolved
+  // against the PowerShell-scoped config, even the shared list — see config.js.
+  if (NEVER_AUTO_ALLOW.some((rule) => rule.pattern.test(command) && config.effectiveTier(rule, psCfg) !== 'off')) return false;
+  if (PS_NEVER_AUTO.some((rule) => rule.pattern.test(command) && config.effectiveTier(rule, psCfg) !== 'off')) return false;
   const token = leadingCommand(command);
   if (EXEC_RUNNER_TOKENS.has(token)) return false;
   if (PKG_EXEC_SUBCOMMAND.test(command)) return false;
   if (PS_NETSH_WLAN_SHOW.test(command)) return true;
-  return PS_ALLOW.has(token) || ALLOW_COMMANDS.has(token);
+  return PS_ALLOW.has(token) || ALLOW_COMMANDS.has(token) || psCfg.extraAllowCommands.has(token);
 }
 
 // ---------------------------------------------------------------------------
@@ -500,22 +519,65 @@ function emit(permissionDecision, permissionDecisionReason) {
   };
 }
 
+/**
+ * Apply one DENY-tier rule (built-in or a config extraDenyRules entry) under
+ * a resolved shell config. Returns an emit()/passthrough() result to return
+ * immediately, or null to keep checking the next rule. An 'ask' override
+ * returns passthrough() DIRECTLY rather than just skipping the rule — if it
+ * only skipped, a later ALLOW_COMMANDS leading-token match could silently
+ * auto-approve the very command being demoted (see config.js effectiveTier).
+ */
+function applyDenyRule(rule, command, cfg) {
+  if (!rule.pattern.test(command)) return null;
+  const eff = config.effectiveTier(rule, cfg);
+  if (eff === 'deny') return emit('deny', `BLOCKED (dangerous): ${rule.reason}`);
+  if (eff === 'ask') return passthrough();
+  return null; // 'off' is unreachable for deny-tier (clamped in effectiveTier)
+}
+
+/**
+ * Apply one BLOCK-tier rule (built-in or a config extraBlockRules entry).
+ * Built-ins carry a `test(cmd)` function (and an optional `raw` flag);
+ * compiled extra rules carry a `pattern` regex tested against the masked
+ * string only. 'off' means "keep checking the next BLOCK rule", unlike DENY's
+ * clamp — block-tier rules are a friction reducer, not a hard safety boundary.
+ */
+function applyBlockRule(rule, raw, masked, cfg) {
+  const matched = rule.test ? rule.test(rule.raw ? raw : masked) : rule.pattern.test(masked);
+  if (!matched) return null;
+  const eff = config.effectiveTier(rule, cfg);
+  if (eff === 'deny') return emit('deny', `BLOCKED: ${rule.reason}`);
+  if (eff === 'ask') return passthrough();
+  return null;
+}
+
+/** A never-auto-allow rule the config promotes to 'deny' short-circuits to a hard block. */
+function checkPromotedDeny(rules, command, cfg) {
+  for (const rule of rules) {
+    if (rule.pattern.test(command) && config.effectiveTier(rule, cfg) === 'deny') {
+      return emit('deny', `BLOCKED (dangerous): rule '${rule.id}' promoted to deny by config.`);
+    }
+  }
+  return null;
+}
+
 function decideBash(command) {
   // DENY scans the raw string (conservative: a quoted "rm -rf" over-blocks,
   // never under-blocks). Guidance + allow tiers see the quote-masked string
   // so quoted text (commit messages, grep patterns) can't trip them.
   const masked = maskQuotes(command, 'bash');
-  for (const rule of DENY_RULES) {
-    if (rule.pattern.test(command)) {
-      return emit('deny', `BLOCKED (dangerous): ${rule.reason}`);
-    }
+  const cfg = config.loadConfig({ builtinIds: BUILTIN_IDS });
+  for (const rule of [...DENY_RULES, ...cfg.extraDenyRules]) {
+    const result = applyDenyRule(rule, command, cfg);
+    if (result) return result;
   }
-  for (const rule of BLOCK_RULES) {
-    if (rule.test(rule.raw ? command : masked)) {
-      return emit('deny', `BLOCKED: ${rule.reason}`);
-    }
+  for (const rule of [...BLOCK_RULES, ...cfg.extraBlockRules]) {
+    const result = applyBlockRule(rule, command, masked, cfg);
+    if (result) return result;
   }
-  if (isAutoApprovable(command, masked)) {
+  const promoted = checkPromotedDeny(NEVER_AUTO_ALLOW, command, cfg);
+  if (promoted) return promoted;
+  if (isAutoApprovable(command, masked, cfg)) {
     return emit('allow', 'Auto-approved by bash-guardrails (known-safe dev command).');
   }
   return passthrough();
@@ -524,17 +586,19 @@ function decideBash(command) {
 function decidePowershell(command) {
   // Same split as decideBash: deny on raw, guidance/allow on masked.
   const masked = maskQuotes(command, 'ps');
-  for (const rule of PS_DENY_RULES) {
-    if (rule.pattern.test(command)) {
-      return emit('deny', `BLOCKED (dangerous): ${rule.reason}`);
-    }
+  const cfg = config.loadConfig({ builtinIds: BUILTIN_IDS });
+  const psCfg = cfg.powershell;
+  for (const rule of [...PS_DENY_RULES, ...psCfg.extraDenyRules]) {
+    const result = applyDenyRule(rule, command, psCfg);
+    if (result) return result;
   }
-  for (const rule of PS_GUIDANCE_RULES) {
-    if (rule.test(rule.raw ? command : masked)) {
-      return emit('deny', `BLOCKED: ${rule.reason}`);
-    }
+  for (const rule of [...PS_GUIDANCE_RULES, ...psCfg.extraBlockRules]) {
+    const result = applyBlockRule(rule, command, masked, psCfg);
+    if (result) return result;
   }
-  if (isAutoApprovablePS(command, masked)) {
+  const promoted = checkPromotedDeny([...NEVER_AUTO_ALLOW, ...PS_NEVER_AUTO], command, psCfg);
+  if (promoted) return promoted;
+  if (isAutoApprovablePS(command, masked, psCfg)) {
     return emit('allow', 'Auto-approved by bash-guardrails (known-safe PowerShell command).');
   }
   return passthrough();

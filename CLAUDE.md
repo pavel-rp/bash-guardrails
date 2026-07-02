@@ -99,6 +99,50 @@ not hot-swapped. Re-running a test mid-session will exercise the OLD hook.
 - **Empty `{}` output means "no opinion"** → Claude Code shows its normal prompt.
   That's the correct default for anything not explicitly denied/blocked/allowed.
 
+## Config engine (`config.js`) invariants
+
+- **Every field in `bash-guardrails.json` is shell-scoped.** Top-level
+  `disabledRules`/`ruleOverrides`/`extraAllowCommands`/`extraDenyRules`/
+  `extraBlockRules` apply to `decideBash` only; `powershell.*` applies to
+  `decidePowershell` only — including for shared git rules. Don't make these
+  cross-apply "for convenience"; a mistake in one section must not silently
+  change the other shell's behavior. See README "Configure without forking".
+- **`effectiveTier()`'s no-override branch must map `tier` to an OUTCOME, not
+  echo it back.** `tier: 'block'` rules natively emit a `'deny'` decision
+  (with an instructive reason) — if you return `'block'` as the "effective
+  tier" for a no-override block rule, `applyBlockRule`'s `eff === 'deny'`
+  check never matches and the rule silently stops firing. (This exact bug
+  shipped and was caught by `node test/run.js` immediately — every BLOCK_RULES
+  case failed — before it left the working tree.)
+- **`ruleOverrides: "off"` and `disabledRules` are the SAME clamp path for a
+  `deny`-tier id** — both resolve to `"ask"`, never a true disable. A config
+  can loosen a hard deny to a prompt; it can never make one vanish silently.
+  `block`/`never-auto-allow` tiers have no such clamp — "off" there is a
+  deliberate, sanctioned loosening of friction, not a safety boundary.
+- **Unknown/invalid override values (e.g. a typo `"denye"` instead of `"deny"`)
+  are treated as "no override" — they fall through to the native default.**
+  This is enforced by `VALID_OVERRIDES` in `effectiveTier()`. Without this
+  guard a typo in a deny-tier id would silently disable that rule, bypassing
+  the clamp invariant above.
+- **An `"ask"` override must return `passthrough()` directly on match, not
+  just skip the rule.** Skipping alone lets execution fall through to the
+  ALLOW check, where an allow-listed leading token (e.g. `git`) could
+  silently auto-approve the very command being demoted. See
+  `applyDenyRule`/`applyBlockRule`'s comments in `guardrails.js`.
+- **Config is loaded fresh from disk on every hook invocation** (no caching)
+  — cheap, and means an edited config file takes effect on the very next
+  command with no restart. Any load/parse/merge failure degrades to
+  `emptyConfig()` (built-in defaults only), never a silent allow — see
+  `loadConfig`'s outer try/catch and the failure matrix in
+  `docs/research/04_config.md` §2.4.
+- **Config paths are injectable for tests** (`loadConfig({userConfigPath,
+  projectConfigPath})`) — unit tests pass explicit fixture paths and never
+  touch the real `~/.claude/bash-guardrails.json`; the end-to-end spawn tests
+  in `test/run.js` override `HOME`/`USERPROFILE`/`CLAUDE_PROJECT_DIR` in the
+  child process env instead. Never remove this seam — without it, a config
+  file that happens to exist on the machine running the tests silently
+  changes what "no config" test cases actually verify.
+
 ## Bump the version or your fix never ships
 
 Claude Code caches installed plugins **by version** at

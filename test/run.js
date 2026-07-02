@@ -14,10 +14,12 @@
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 
 const HOOKS_DIR = path.join(__dirname, '..', 'plugins', 'bash-guardrails', 'hooks');
 const HOOK = path.join(HOOKS_DIR, 'guardrails.js');
 const HOOKS_JSON = path.join(HOOKS_DIR, 'hooks.json');
+const CONFIG = require(path.join(HOOKS_DIR, 'config.js'));
 
 // [label, command, expected decision: 'deny' | 'allow' | 'ask', tool='Bash']
 const CASES = [
@@ -193,21 +195,29 @@ function decisionFor(command, tool) {
 }
 
 let failed = 0;
+let total = 0;
 for (const [label, command, expected, tool] of CASES) {
   const actual = decisionFor(command, tool);
   const ok = actual === expected;
+  total++;
   if (!ok) failed++;
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${expected.padEnd(5)} ${ok ? '' : `(got ${actual}) `}${(tool || 'Bash').padEnd(10)} ${label}`);
+}
+
+// Generic labeled check used by the wiring + config sections below. Tracks
+// `total`/`failed` itself so the final tally never needs manual arithmetic.
+function check(category, label, ok) {
+  total++;
+  if (!ok) failed++;
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${category.padEnd(5)} ${label}`);
 }
 
 // Validate hooks.json WIRING, not just guardrails.js logic. Claude Code requires
 // a top-level `hooks` record ({ "hooks": { "PreToolUse": [...] } }); putting the
 // event at the root fails to load with `expected record at path ["hooks"]`. The
 // command cases above spawn guardrails.js directly, so they'd never catch this.
-let wiringFailed = 0;
 function wiringCheck(label, ok) {
-  if (!ok) { wiringFailed++; failed++; }
-  console.log(`${ok ? 'PASS' : 'FAIL'}  wire  ${label}`);
+  check('wire', label, ok);
 }
 try {
   const cfg = JSON.parse(fs.readFileSync(HOOKS_JSON, 'utf8'));
@@ -249,6 +259,176 @@ try {
   wiringCheck(`rule modules load (${err.message})`, false);
 }
 
-const total = CASES.length + 6;
+// ===========================================================================
+// Config engine (Phase 3): unit tests for config.js's merge/compile logic,
+// plus end-to-end spawn tests proving the REAL hook respects a config file.
+// Fixtures live under a private os.tmpdir() subdir — NEVER the real
+// ~/.claude/bash-guardrails.json, so a config file on the machine running
+// these tests can't leak in and CI (no such file) can't silently diverge.
+// ===========================================================================
+{
+  const builtinIds = new Set(['rm-recursive']);
+  check('cfg', 'compileExtraRule: valid entry compiles',
+    !!CONFIG.compileExtraRule({ id: 'x', pattern: 'foo', reason: 'r' }, 'deny', builtinIds));
+  check('cfg', 'compileExtraRule: bad regex dropped',
+    CONFIG.compileExtraRule({ id: 'x', pattern: '(', reason: 'r' }, 'deny', builtinIds) === null);
+  check('cfg', 'compileExtraRule: missing id dropped',
+    CONFIG.compileExtraRule({ pattern: 'foo', reason: 'r' }, 'deny', builtinIds) === null);
+  check('cfg', 'compileExtraRule: builtin id collision rejected',
+    CONFIG.compileExtraRule({ id: 'rm-recursive', pattern: 'foo', reason: 'r' }, 'deny', builtinIds) === null);
+  const compiled = CONFIG.compileExtraRule({ id: 'x', pattern: 'FOO', reason: 'r' }, 'deny', builtinIds);
+  check('cfg', 'compileExtraRule: flags default to "i"', !!compiled && compiled.pattern.test('foo'));
+  check('cfg', 'compileExtraRule: global flag "g" rejected (stateful test() via lastIndex)',
+    CONFIG.compileExtraRule({ id: 'x', pattern: 'foo', reason: 'r', flags: 'g' }, 'deny', builtinIds) === null);
+  check('cfg', 'compileExtraRule: sticky flag "y" rejected',
+    CONFIG.compileExtraRule({ id: 'x', pattern: 'foo', reason: 'r', flags: 'y' }, 'deny', builtinIds) === null);
+}
+
+{
+  const user = {
+    disabledRules: ['a'], ruleOverrides: { a: 'ask', b: 'deny' },
+    extraAllowCommands: ['docker'], extraDenyRules: [{ id: 'u1', pattern: 'x', reason: 'r' }], extraBlockRules: [],
+  };
+  const project = {
+    disabledRules: ['b'], ruleOverrides: { b: 'off' },
+    extraAllowCommands: ['docker', 'kubectl'], extraDenyRules: [{ id: 'u1', pattern: 'y', reason: 'r2' }], extraBlockRules: [],
+  };
+  const merged = CONFIG.mergeRawShellConfig(user, project);
+  check('cfg', 'merge: disabledRules concatenated + deduped',
+    merged.disabledRules.length === 2 && merged.disabledRules.includes('a') && merged.disabledRules.includes('b'));
+  check('cfg', 'merge: ruleOverrides deep-merged, project wins per key',
+    merged.ruleOverrides.b === 'off' && merged.ruleOverrides.a === 'ask');
+  check('cfg', 'merge: extraAllowCommands concatenated + deduped', merged.extraAllowCommands.length === 2);
+  check('cfg', 'merge: extraDenyRules deduped by id, project tier wins',
+    merged.extraDenyRules.length === 1 && merged.extraDenyRules[0].pattern === 'y');
+}
+
+{
+  const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bg-config-test-'));
+  const writeFixture = (name, content) => {
+    const p = path.join(fixtureDir, name);
+    fs.writeFileSync(p, content);
+    return p;
+  };
+  check('cfg', 'loadConfigFile: missing file -> null',
+    CONFIG.loadConfigFile(path.join(fixtureDir, 'nope.json')) === null);
+  check('cfg', 'loadConfigFile: malformed JSON -> null (whole file ignored)',
+    CONFIG.loadConfigFile(writeFixture('malformed.json', '{ not json')) === null);
+  check('cfg', 'loadConfigFile: missing version -> null',
+    CONFIG.loadConfigFile(writeFixture('noversion.json', JSON.stringify({ disabledRules: [] }))) === null);
+  check('cfg', 'loadConfigFile: unknown version -> null',
+    CONFIG.loadConfigFile(writeFixture('badversion.json', JSON.stringify({ version: 2 }))) === null);
+  check('cfg', 'loadConfigFile: valid file parses',
+    !!CONFIG.loadConfigFile(writeFixture('valid.json', JSON.stringify({ version: 1, disabledRules: ['x'] }))));
+  fs.rmSync(fixtureDir, { recursive: true, force: true });
+}
+
+// Tier x override truth table (docs/IMPROVEMENT_PLAN.md Phase 3 / advisor
+// review): pin every cell so a future edit can't silently reopen the
+// off-on-deny fail-open hole.
+{
+  const denyRule = { id: 'd', tier: 'deny' };
+  const blockRule = { id: 'b', tier: 'block' };
+  const naaRule = { id: 'n', tier: 'never-auto-allow' };
+  const shellCfg = (overrides, disabled) => ({ ruleOverrides: overrides || {}, disabledRules: new Set(disabled || []) });
+
+  check('cfg', 'deny + no override -> deny', CONFIG.effectiveTier(denyRule, shellCfg()) === 'deny');
+  check('cfg', 'deny + override ask -> ask', CONFIG.effectiveTier(denyRule, shellCfg({ d: 'ask' })) === 'ask');
+  check('cfg', 'deny + override off -> CLAMPED to ask', CONFIG.effectiveTier(denyRule, shellCfg({ d: 'off' })) === 'ask');
+  check('cfg', 'deny + disabledRules -> CLAMPED to ask', CONFIG.effectiveTier(denyRule, shellCfg({}, ['d'])) === 'ask');
+
+  check('cfg', 'block + no override -> deny', CONFIG.effectiveTier(blockRule, shellCfg()) === 'deny');
+  check('cfg', 'block + override ask -> ask', CONFIG.effectiveTier(blockRule, shellCfg({ b: 'ask' })) === 'ask');
+  check('cfg', 'block + override off -> off (not clamped)', CONFIG.effectiveTier(blockRule, shellCfg({ b: 'off' })) === 'off');
+  check('cfg', 'block + disabledRules -> off (not clamped)', CONFIG.effectiveTier(blockRule, shellCfg({}, ['b'])) === 'off');
+
+  check('cfg', 'never-auto-allow + no override -> ask', CONFIG.effectiveTier(naaRule, shellCfg()) === 'ask');
+  check('cfg', 'never-auto-allow + override deny -> deny (promoted)', CONFIG.effectiveTier(naaRule, shellCfg({ n: 'deny' })) === 'deny');
+  check('cfg', 'never-auto-allow + override off -> off (loosened)', CONFIG.effectiveTier(naaRule, shellCfg({ n: 'off' })) === 'off');
+  check('cfg', 'never-auto-allow + disabledRules -> off (loosened)', CONFIG.effectiveTier(naaRule, shellCfg({}, ['n'])) === 'off');
+
+  // An unrecognized override value must NOT fail open — applyDenyRule/
+  // applyBlockRule only branch on the exact strings 'deny'/'ask', so
+  // anything else falling through unvalidated would behave like 'off' on a
+  // rule the clamp exists specifically to protect.
+  check('cfg', 'deny + unrecognized override value ("allow") -> ignored, stays deny',
+    CONFIG.effectiveTier(denyRule, shellCfg({ d: 'allow' })) === 'deny');
+  check('cfg', 'deny + non-string override value (true) -> ignored, stays deny',
+    CONFIG.effectiveTier(denyRule, shellCfg({ d: true })) === 'deny');
+  check('cfg', 'block + unrecognized override -> native deny (not silently disabled)',
+    CONFIG.effectiveTier(blockRule, shellCfg({ b: 'bogus' })) === 'deny');
+  check('cfg', 'never-auto-allow + unrecognized override -> native ask',
+    CONFIG.effectiveTier(naaRule, shellCfg({ n: 'bogus' })) === 'ask');
+}
+
+// End-to-end: spawn the REAL hook with fixture config files via HOME/
+// USERPROFILE + CLAUDE_PROJECT_DIR env overrides (os.homedir() reads these).
+function spawnWithConfig({ userCfg, projectCfg, command, tool }) {
+  const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bg-home-'));
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bg-project-'));
+  const write = (dir, cfg) => {
+    fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.claude', 'bash-guardrails.json'), typeof cfg === 'string' ? cfg : JSON.stringify(cfg));
+  };
+  if (userCfg !== undefined) write(homeDir, userCfg);
+  if (projectCfg !== undefined) write(projectDir, projectCfg);
+  const payload = JSON.stringify({ tool_name: tool || 'Bash', tool_input: { command } });
+  const res = spawnSync(process.execPath, [HOOK], {
+    input: payload,
+    encoding: 'utf8',
+    env: { ...process.env, HOME: homeDir, USERPROFILE: homeDir, CLAUDE_PROJECT_DIR: projectDir },
+  });
+  fs.rmSync(homeDir, { recursive: true, force: true });
+  fs.rmSync(projectDir, { recursive: true, force: true });
+  const out = JSON.parse(res.stdout || '{}');
+  return (out.hookSpecificOutput && out.hookSpecificOutput.permissionDecision) || 'ask';
+}
+
+{
+  check('cfg', 'e2e: deny rule overridden to ask -> ask (not silently allowed)',
+    spawnWithConfig({ projectCfg: { version: 1, ruleOverrides: { 'git-push-force': 'ask' } }, command: 'git push --force origin feat' }) === 'ask');
+
+  check('cfg', 'e2e: disabledRules on a deny-tier id is CLAMPED (not silently allowed)',
+    spawnWithConfig({ projectCfg: { version: 1, disabledRules: ['rm-recursive'] }, command: 'rm -rf dist' }) === 'ask');
+
+  check('cfg', 'e2e: extraDenyRules hard-denies a custom pattern',
+    spawnWithConfig({
+      projectCfg: { version: 1, extraDenyRules: [{ id: 'org-terraform-destroy', pattern: '\\bterraform\\s+destroy\\b', reason: 'blocked by team policy.' }] },
+      command: 'terraform destroy',
+    }) === 'deny');
+
+  check('cfg', 'e2e: extraAllowCommands auto-approves a new leading command',
+    spawnWithConfig({ projectCfg: { version: 1, extraAllowCommands: ['docker'] }, command: 'docker ps' }) === 'allow');
+
+  check('cfg', 'e2e: block rule turned off lets an otherwise-allowed command through',
+    spawnWithConfig({ projectCfg: { version: 1, ruleOverrides: { 'pipe-block': 'off' } }, command: 'git log --oneline | wc -l' }) !== 'deny');
+
+  check('cfg', 'e2e: never-auto-allow promoted to deny',
+    spawnWithConfig({ projectCfg: { version: 1, ruleOverrides: { 'inline-eval-interpreter': 'deny' } }, command: 'node -e "1+1"' }) === 'deny');
+
+  check('cfg', 'e2e: top-level ruleOverrides does NOT cross-apply to PowerShell (shell-scoped)',
+    spawnWithConfig({ projectCfg: { version: 1, ruleOverrides: { 'git-push-force': 'ask' } }, command: 'git push --force origin feat', tool: 'PowerShell' }) === 'deny');
+
+  check('cfg', 'e2e: powershell.ruleOverrides DOES affect PowerShell',
+    spawnWithConfig({ projectCfg: { version: 1, powershell: { ruleOverrides: { 'git-push-force': 'ask' } } }, command: 'git push --force origin feat', tool: 'PowerShell' }) === 'ask');
+
+  check('cfg', 'e2e: malformed config file falls back to built-in defaults',
+    spawnWithConfig({ projectCfg: '{ not json', command: 'rm -rf dist' }) === 'deny');
+
+  check('cfg', 'e2e: no config file -> built-in default behavior unchanged',
+    spawnWithConfig({ command: 'rm -rf dist' }) === 'deny');
+
+  // Regression for the Copilot-caught fail-open: a garbage ruleOverrides
+  // value on a deny-tier id must never silently allow the command.
+  check('cfg', 'e2e: unrecognized ruleOverrides value on a deny-tier id does NOT silently allow',
+    spawnWithConfig({ projectCfg: { version: 1, ruleOverrides: { 'rm-recursive': 'allow' } }, command: 'rm -rf dist' }) === 'deny');
+
+  check('cfg', 'e2e: extraDenyRules entry with a global flag is dropped (rule never registers)',
+    spawnWithConfig({
+      projectCfg: { version: 1, extraDenyRules: [{ id: 'org-custom', pattern: '\\bfoo\\b', reason: 'r', flags: 'g' }] },
+      command: 'foo bar',
+    }) !== 'deny');
+}
+
 console.log(`\n${total - failed}/${total} passed`);
 process.exit(failed ? 1 : 0);
