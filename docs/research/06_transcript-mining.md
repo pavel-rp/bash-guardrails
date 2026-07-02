@@ -9,7 +9,8 @@ Raw corpus and intermediate JSON: `.local/` (gitignored, never committed).
 **Snapshot date:** 2026-07-02. All counts below are a point-in-time census —
 this session's own transcript kept growing while the census ran (the
 extractor re-ran a few times as the extraction logic was corrected; final
-numbers are from the last run, `generatedAt: 2026-07-02T10:1x`).
+numbers are from the last run (around 10:1x local time — the extractor's
+`generatedAt` field only recorded the minute imprecisely for that run).
 
 ## TL;DR
 

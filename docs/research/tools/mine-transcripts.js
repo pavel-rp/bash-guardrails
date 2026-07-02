@@ -201,7 +201,6 @@ async function extract() {
     // Per-file state (each file is an independently-ordered thread).
     const pendingToolUses = new Map(); // tool_use_id -> {name, input, timestamp, seq}
     const hookAttachments = new Map(); // toolUseID -> {decision, reason, raw, timestamp, command}
-    const shellSeq = []; // ordered list of finalized Bash/PowerShell events for this file (steering analysis)
     let seq = 0;
 
     const rl = readline.createInterface({ input: fs.createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
@@ -269,7 +268,7 @@ async function extract() {
           let outcome;
           if (topLevelIsString && topLevelResult === 'User rejected tool use') {
             outcome = 'user-rejected';
-          } else if (isError && /^The user doesn.t want to proceed/.test(text.trim())) {
+          } else if (isError && /^The user doesn['’]t want to proceed/.test(text.trim())) {
             outcome = 'user-rejected';
           } else if (isError && /^BLOCKED( \(dangerous\))?:/.test(text.trim())) {
             outcome = 'hook-blocked';
@@ -368,8 +367,9 @@ async function extract() {
 function decisionFor(command, tool) {
   const payload = JSON.stringify({ tool_name: tool, tool_input: { command } });
   const res = spawnSync(process.execPath, [HOOK_PATH], { input: payload, encoding: 'utf8' });
-  if (res.error || res.status !== 0 && res.status !== null && !res.stdout) {
-    return { decision: 'spawn-error', reason: res.error ? String(res.error) : `exit ${res.status}` };
+  if (res.error || res.signal || (res.status !== 0 && !res.stdout)) {
+    const reason = res.error ? String(res.error) : (res.signal ? `killed by ${res.signal}` : `exit ${res.status}`);
+    return { decision: 'spawn-error', reason };
   }
   let out = {};
   try {
@@ -508,7 +508,7 @@ function isLikelyQuoted(command, index) {
     else if (c === '"' && !inS && !inB) inD = !inD;
     else if (c === '`' && !inS && !inD) inB = !inB;
   }
-  return inS || inD;
+  return inS || inD || inB;
 }
 
 function analyze() {
