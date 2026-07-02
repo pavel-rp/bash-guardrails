@@ -9,9 +9,9 @@ command:
 
 | Decision | What | Examples |
 |----------|------|----------|
-| **DENY** | Hard-block destructive ops | `rm -rf` (incl. `/bin/rm -rf`), `find -delete`, `find -exec rm`, `dd`, `mkfs`, fork bombs, `git push --force` (incl. `+refspec`), `git reset --hard`, `git clean -f`, `git checkout <path>` / `git restore <path>` (discards changes), `git stash drop`/`clear`, `git branch -D`/`--delete --force`, `git push --delete`/`:branch`/`--mirror`, push to `main`/`master` |
+| **DENY** | Hard-block destructive ops | `rm -rf` (incl. `/bin/rm -rf`), `find -delete`, `find -exec rm`, `dd`, `mkfs`, fork bombs, `git push --force` (incl. `+refspec`), `git reset --hard`, `git clean -f`, `git checkout <path>` / `git restore <path>` (discards changes), `git stash drop`/`clear`, `git switch -f`/`--discard-changes`, `git branch -D`/`--delete --force`, `git push --delete`/`:branch`/`--mirror`, push to `main`/`master`, PowerShell `Stop-Computer`/`Restart-Computer` |
 | **BLOCK** | Reject obfuscation-prone compound commands **with an instructive reason**, so Claude rewrites them cleanly | pipes `\|`, redirects `>`, `cd`, heredocs `<<`, `cat`/`head`/`tail` in command position, backticks outside single quotes, appended `; echo "…$?"` exit-code probes |
-| **ALLOW** | Auto-approve known-safe dev commands | `git`, `gh`, `pnpm`, `npm`, `node`, `ls`, `grep`, `mkdir`, `echo`, … |
+| **ALLOW** | Auto-approve known-safe dev commands | `git`, `gh`, `pnpm`, `npm`, `node`, `ls`, `grep`, `mkdir`, `echo`, `rm` (non-recursive), `sleep`, `claude`, `mv`, … |
 
 BLOCK and ALLOW decisions are **quote-aware**: the contents of quoted strings
 are masked before the pattern rules run, so `git commit -m "feat: a | b"` or
@@ -32,8 +32,13 @@ Everything else falls through to Claude Code's normal permission prompt — the
 demoted here rather than auto-approved: inline interpreters (`node -e`,
 `python -c`, `perl -e`, `bun -e`, `deno eval`), package runners that execute an
 arbitrary package (`npx`, `bunx`, `pnpm dlx`, `yarn dlx`, `npm exec`),
-`find -exec`, and `chmod`/`chown -R`. They're useful but can do anything, so
-they prompt instead of running silently.
+`find -exec`, `chmod`/`chown -R`, and `mv -f` (can silently overwrite an
+existing destination). Git ref-surgery — `update-ref -d`, `reflog
+expire`/`delete`, `gc --prune=now`/`--aggressive`, `filter-branch`/
+`filter-repo`, `worktree remove --force` — is also demoted to ask rather than
+denied: rarely typed by accident, but silent auto-approval is still wrong
+given how much recovery value they can destroy. They're useful but can do
+anything, so they prompt instead of running silently.
 
 ## Why it works
 
@@ -57,14 +62,20 @@ run silently.
 On Windows the agent reaches for a separate **PowerShell** tool, so the hook
 covers it too (matcher `Bash|PowerShell`). The PowerShell tier denies
 `Remove-Item -Recurse`, `gci -Recurse | Remove-Item`, `Clear-Content`, disk
-formats, and the shared destructive git ops; steers `Out-File`/`Set-Content`/
-`New-Item -Value`/`>` to the Write tool; and auto-approves read-only cmdlets
-(`Get-ChildItem`, `Select-String`, …) and dev tools. Unlike Bash, the object
-pipeline `|` is **not** blocked — it's idiomatic in PowerShell — but the deny
-scan still reads the whole pipeline (so a recursive delete hidden after a `|`
-is caught), and piping into an external interpreter (`… | node x.js`) is
-demoted to a prompt: the pipeline exemption is for typed cmdlet flow, not for
-feeding scripts.
+formats, `Stop-Computer`/`Restart-Computer`, and the shared destructive git
+ops; steers `Out-File`/`Set-Content`/`New-Item -Value`/`>` to the Write tool;
+and auto-approves read-only cmdlets (`Get-ChildItem`, `Select-String`, …),
+dev tools, and the narrow `netsh wlan show *` diagnostic query (bare `netsh`
+also does firewall/interface writes, so it isn't allow-listed generally).
+Unlike Bash, the object pipeline `|` is **not** blocked — it's idiomatic in
+PowerShell — but the deny scan still reads the whole pipeline (so a recursive
+delete hidden after a `|` is caught), and piping into an external interpreter
+(`… | node x.js`) is demoted to a prompt: the pipeline exemption is for typed
+cmdlet flow, not for feeding scripts.
+
+Neither shell's `ALLOW_COMMANDS`/`PS_ALLOW` will ever include the other shell
+(or `cmd`/`wsl`) — a nested shell hands its argument to rules that can't parse
+that shell's syntax, silently routing around every check. See CLAUDE.md.
 
 ## Install
 
