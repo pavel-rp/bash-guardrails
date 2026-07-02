@@ -119,6 +119,11 @@ not hot-swapped. Re-running a test mid-session will exercise the OLD hook.
   can loosen a hard deny to a prompt; it can never make one vanish silently.
   `block`/`never-auto-allow` tiers have no such clamp — "off" there is a
   deliberate, sanctioned loosening of friction, not a safety boundary.
+- **Unknown/invalid override values (e.g. a typo `"denye"` instead of `"deny"`)
+  are treated as "no override" — they fall through to the native default.**
+  This is enforced by `VALID_OVERRIDES` in `effectiveTier()`. Without this
+  guard a typo in a deny-tier id would silently disable that rule, bypassing
+  the clamp invariant above.
 - **An `"ask"` override must return `passthrough()` directly on match, not
   just skip the rule.** Skipping alone lets execution fall through to the
   ALLOW check, where an allow-listed leading token (e.g. `git`) could

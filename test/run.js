@@ -355,6 +355,10 @@ try {
     CONFIG.effectiveTier(denyRule, shellCfg({ d: 'allow' })) === 'deny');
   check('cfg', 'deny + non-string override value (true) -> ignored, stays deny',
     CONFIG.effectiveTier(denyRule, shellCfg({ d: true })) === 'deny');
+  check('cfg', 'block + unrecognized override -> native deny (not silently disabled)',
+    CONFIG.effectiveTier(blockRule, shellCfg({ b: 'bogus' })) === 'deny');
+  check('cfg', 'never-auto-allow + unrecognized override -> native ask',
+    CONFIG.effectiveTier(naaRule, shellCfg({ n: 'bogus' })) === 'ask');
 }
 
 // End-to-end: spawn the REAL hook with fixture config files via HOME/
