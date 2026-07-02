@@ -105,10 +105,56 @@ Plugins are cached **by version**, so an update only refetches when the repo's
 `version` is higher than the installed one. If a machine reports "already at the
 latest version" but you expect changes, the version wasn't bumped.
 
-## Customize
+## Configure without forking
 
-All rules live in [`plugins/bash-guardrails/hooks/guardrails.js`](plugins/bash-guardrails/hooks/guardrails.js)
-as readable arrays:
+Drop a `bash-guardrails.json` in `~/.claude/` (user-wide) and/or
+`<project>/.claude/` (project-specific, wins on conflict) — no fork, no
+restart-required code edit, effective on the next hook invocation:
+
+```jsonc
+{
+  "version": 1,
+  "disabledRules": ["cat-head-tail-guard"],
+  "ruleOverrides": { "chmod-chown-recursive": "deny" },
+  "extraAllowCommands": ["docker", "kubectl"],
+  "extraDenyRules": [
+    { "id": "org-terraform-destroy", "pattern": "\\bterraform\\s+destroy\\b", "reason": "blocked by team policy." }
+  ],
+  "extraBlockRules": [],
+  "powershell": { "disabledRules": [], "ruleOverrides": {}, "extraAllowCommands": [], "extraDenyRules": [], "extraBlockRules": [] }
+}
+```
+
+Every field is **shell-scoped**: the top level applies to the Bash tool only,
+`powershell.*` to the PowerShell tool only — a shared rule (e.g. a git deny
+rule that fires in both shells) needs its own entry in both sections to
+loosen it everywhere. This is deliberate: a mistake in one section can't
+silently change the other shell's behavior.
+
+Rule ids come from `guardrails.js`'s `id` fields (every entry in
+`DENY_RULES`/`BLOCK_RULES`/`NEVER_AUTO_ALLOW` and the PS mirrors has one).
+`ruleOverrides`/`disabledRules` (equivalent — `disabledRules` is shorthand for
+`ruleOverrides: {id: "off"}`) accept a new tier per id:
+
+| Native tier | `"deny"` | `"ask"` | `"off"` |
+|---|---|---|---|
+| `deny` (hard-block) | no-op | demote to a prompt | **clamped to `"ask"`** — a deny-tier rule can never be fully disabled by config, only loosened to a prompt |
+| `block` (obfuscation guidance) | no-op (still emits `deny`) | demote to a prompt | fully disabled |
+| `never-auto-allow` (demoted from auto-allow) | **promote** to a hard block | no-op | stop demoting — the pattern can auto-approve again if otherwise eligible |
+
+`extraDenyRules`/`extraBlockRules` take `{id, pattern, reason, flags?}`
+(`flags` defaults to `"i"`); a bad regex or an id colliding with a built-in
+drops just that one entry, not the whole file. Any load failure — missing
+file, unreadable, malformed JSON, unknown `version` — silently falls back to
+the built-in defaults; **nothing in the failure path produces a silent
+allow**. See `docs/research/04_config.md` for the full design rationale.
+
+## Customize (fork)
+
+For a wholly new rule shape the config file's schema can't express, fork
+[`pavel-rp/bash-guardrails`](https://github.com/pavel-rp/bash-guardrails) and
+edit [`plugins/bash-guardrails/hooks/guardrails.js`](plugins/bash-guardrails/hooks/guardrails.js)
+directly — the rules are readable arrays:
 
 - `DENY_RULES` / `GIT_DENY_RULES` — destructive patterns (add your own).
 - `BLOCK_RULES` — obfuscation-prone patterns + the guidance Claude receives.
@@ -118,11 +164,9 @@ as readable arrays:
   `find -exec`, `chmod -R`).
 - `PS_*` — the PowerShell equivalents of each tier.
 
-To tune the rules, fork [`pavel-rp/bash-guardrails`](https://github.com/pavel-rp/bash-guardrails),
-edit the arrays, bump `version` in both `plugin.json` and `marketplace.json`, and
-add your fork as the marketplace instead. To loosen a rule (e.g. allow pipes),
-delete it from `BLOCK_RULES`. Restart Claude Code after any change — hooks aren't
-hot-reloaded.
+Bump `version` in both `plugin.json` and `marketplace.json`, and add your fork
+as the marketplace instead. Restart Claude Code after any change — hooks
+aren't hot-reloaded.
 
 ## Trade-offs
 
@@ -156,6 +200,7 @@ bash-guardrails/
         │   └── plugin.json        # plugin manifest
         ├── hooks/
         │   ├── hooks.json         # wires the PreToolUse hook
-        │   └── guardrails.js      # the rules (readable, edit me)
+        │   ├── guardrails.js      # the rules (readable, edit me)
+        │   └── config.js          # loads/merges the optional config file
         └── README.md
 ```
