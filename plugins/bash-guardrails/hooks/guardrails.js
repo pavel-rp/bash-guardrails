@@ -66,11 +66,26 @@ const GIT_DENY_RULES = [
   { pattern: /\bgit\s+restore\s+(?:--\s+)?\./,        reason: 'git restore <path> discards local changes and is blocked.' },
   { pattern: /\bgit\s+restore\b[^\n]*\s(?:--worktree|-W)\b/, reason: 'git restore --worktree discards local changes and is blocked.' },
   { pattern: /\bgit\s+checkout\s+(?:--\s+)?\./,       reason: 'git checkout <path> discards local changes and is blocked.' },
+  // git switch is git's newer checkout replacement; -f/--discard-changes is
+  // the same working-tree-discard class as restore/checkout above.
+  { pattern: /\bgit\s+switch\b[^\n]*\s(?:--discard-changes\b|-f\b)/i, reason: 'git switch -f/--discard-changes discards local changes and is blocked.' },
   { pattern: /\bgit\s+branch\s+-D\b/,                 reason: 'force-deleting a branch (git branch -D) is blocked.' },
   // Same op spelled differently: --delete + --force in either order, or a
   // combined short flag carrying both letters (-fd, -df, -f -d). Two
   // lookaheads = "a delete-ish token AND a force-ish token both present".
   { pattern: /\bgit\s+branch\b(?=[^\n]*(?:--delete\b|\s-[a-z]*d))(?=[^\n]*(?:--force\b|\s-[a-z]*f))/i, reason: 'force-deleting a branch (git branch --delete --force / -fd) is blocked.' },
+];
+
+// Git ref-surgery: not destructive enough to hard-deny (plumbing-level, rarely
+// typed by accident — the command name itself signals deliberate intent), but
+// forecloses recovery or rewrites history, so silent auto-approval is wrong.
+// Demoted to ask, not DENY. Shared by both shells via NEVER_AUTO_ALLOW below.
+const GIT_NEVER_AUTO_ALLOW = [
+  /\bgit\s+update-ref\s+-d\b/i,
+  /\bgit\s+reflog\s+(?:expire|delete)\b/i,
+  /\bgit\s+gc\b[^\n]*(?:--prune=now\b|--aggressive\b)/i,
+  /\bgit\s+filter-(?:branch|repo)\b/i,
+  /\bgit\s+worktree\s+remove\b[^\n]*(?:--force\b|\s-[a-z]*f\b)/i,
 ];
 
 // ---------------------------------------------------------------------------
@@ -175,6 +190,16 @@ const ALLOW_COMMANDS = new Set([
   'which', 'where', 'true', 'false', 'date', 'env', 'printenv',
   // json processing (read-only; a `> file` redirect is still blocked)
   'jq',
+  // recursive forms are hard-DENIED above before this check ever runs, so
+  // allow-listing bare `rm` only opens up single-file/non-recursive removal.
+  'rm',
+  // pure delay, cannot be destructive.
+  'sleep',
+  // the CLI's own read-only self-checks (`claude --version`, `claude plugin validate`).
+  'claude',
+  // paired with a NEVER_AUTO_ALLOW demotion below: `mv -f` can silently
+  // overwrite an existing destination, so only the non-force form auto-runs.
+  'mv',
 ]);
 
 // Chaining operators that, if present, mean we should NOT auto-approve (we
@@ -191,7 +216,10 @@ const HAS_CHAIN = /&&|;/;
 // runs JS, not a shell token a regex on `rm -rf` would catch), so inline-eval
 // must prompt rather than auto-run. See README "Trade-offs".
 const NEVER_AUTO_ALLOW = [
-  // interpreters running inline code (node -e, python -c, perl/ruby -e, bun -e)
+  // interpreters running inline code (node -e, python -c, perl/ruby -e, bun -e).
+  // perl/ruby are unreachable dead code today — neither is in ALLOW_COMMANDS,
+  // so leadingCommand(command) can never be 'perl'/'ruby' in the first place —
+  // kept as defense-in-depth in case either is ever allow-listed.
   /\b(?:node|bun|python|python3|perl|ruby)\b[^\n]*\s-(?:e|c)\b/i,
   /\b(?:node)\b[^\n]*\s--eval\b/i,
   /\bdeno\s+eval\b/i,
@@ -199,6 +227,10 @@ const NEVER_AUTO_ALLOW = [
   /\bfind\b[^\n]*-exec(?:dir)?\b/i,
   // recursive permission/ownership changes
   /\bch(?:mod|own)\b[^\n]*\s-[a-z]*R\b/i,
+  // mv silently overwrites an existing destination with -f; only the bare
+  // (non-force) form is safe to auto-run. Paired with `mv` on ALLOW_COMMANDS.
+  /\bmv\b[^\n]*\s(?:--force\b|-[a-z]*f\b)/i,
+  ...GIT_NEVER_AUTO_ALLOW,
 ];
 
 // Package runners execute an arbitrary (possibly just-downloaded) package —
@@ -341,6 +373,9 @@ const PS_DENY_RULES = [
   { pattern: /\b(?:Format-Volume|Clear-Disk|Remove-Partition|Initialize-Disk|Reset-PhysicalDisk)\b/i, reason: 'disk/partition operations are blocked.' },
   { pattern: /(^|[\s;|(=])(?:Remove-Item|rm|ri)\b[^;\n]*\b(?:HKLM|HKCU|HKCR|HKU):/i, reason: 'registry key deletion is blocked.' },
   { pattern: /(^|[\s;|(=])(?:del|rd|rmdir)\b[^;\n]*\/s\b/i, reason: 'recursive del/rd /s is blocked.' },
+  // Shuts down or reboots the whole machine — kills the session itself. No
+  // legitimate reason for a coding agent to do this; ask-tier is too weak.
+  { pattern: /(^|[\s;|(=])(?:Stop-Computer|Restart-Computer)\b/i, reason: 'shutting down or restarting the machine is blocked.' },
   ...GIT_DENY_RULES,
 ];
 
@@ -396,6 +431,12 @@ const PS_ALLOW = new Set([
   'new-item', 'ni', 'md', 'mkdir',
 ]);
 
+// Narrow, pattern-based exception: `netsh wlan show ...` is a read-only
+// Wi-Fi diagnostic query. `netsh` itself is NOT allow-listed — it also does
+// firewall/interface writes — so this is checked separately, not added to
+// PS_ALLOW's leading-token set.
+const PS_NETSH_WLAN_SHOW = /^\s*netsh(?:\.exe)?\s+wlan\s+show\b/i;
+
 // Constructs that must never auto-approve in PowerShell — even when the leading
 // cmdlet is on PS_ALLOW (e.g. a safe `gci` piped into a mutating cmdlet, or a
 // scriptblock that runs arbitrary code). They fall through to a prompt.
@@ -424,6 +465,7 @@ function isAutoApprovablePS(command, masked) {
   const token = leadingCommand(command);
   if (EXEC_RUNNER_TOKENS.has(token)) return false;
   if (PKG_EXEC_SUBCOMMAND.test(command)) return false;
+  if (PS_NETSH_WLAN_SHOW.test(command)) return true;
   return PS_ALLOW.has(token) || ALLOW_COMMANDS.has(token);
 }
 

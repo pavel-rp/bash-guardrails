@@ -130,6 +130,17 @@ PowerShell rules mirror the Bash tiers but differ deliberately:
 - `PS_NEVER_AUTO` blocks auto-approve for any mutating verb / scriptblock / iex /
   download even when the leading cmdlet is safe — so `gci | Remove-Item` prompts.
 
+## Never allow-list a nested shell
+
+`bash`/`sh`/`cmd`/`cmd.exe`/`powershell`/`pwsh`/`wsl` must never be added to
+`ALLOW_COMMANDS` or `PS_ALLOW`. Each shell's rules only understand that
+shell's own syntax — Bash's `DENY_RULES` don't recognize `Remove-Item
+-Recurse`, PowerShell's `PS_DENY_RULES` don't recognize `rm -rf`. Invoking
+one shell's interpreter from inside the other tool hands it an opaque string
+neither rule set can parse, silently routing around every check. This isn't
+a present gap (none of those tokens are allow-listed today) — it's a standing
+invariant to protect against a future mistake.
+
 ## Name must agree in three places
 
 The plugin name is referenced in `.claude-plugin/marketplace.json`,
